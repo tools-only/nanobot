@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 from pydantic_settings import BaseSettings
 
@@ -68,7 +68,11 @@ class ProvidersConfig(Base):
     openrouter: ProviderConfig = Field(default_factory=ProviderConfig)
     deepseek: ProviderConfig = Field(default_factory=ProviderConfig)
     groq: ProviderConfig = Field(default_factory=ProviderConfig)
-    zhipu: ProviderConfig = Field(default_factory=ProviderConfig)
+    # zhipu: ProviderConfig = Field(default_factory=ProviderConfig)
+    zai: ProviderConfig = Field(
+        default_factory=ProviderConfig,
+        validation_alias=AliasChoices("zai", "zhipu"),  # backward-compatible legacy key
+    )
     dashscope: ProviderConfig = Field(default_factory=ProviderConfig)
     vllm: ProviderConfig = Field(default_factory=ProviderConfig)
     ollama: ProviderConfig = Field(default_factory=ProviderConfig)  # Ollama local models
@@ -228,6 +232,11 @@ class Config(BaseSettings):
             if p and p.api_key:
                 return p, spec.name
         return None, None
+
+    @property
+    def zhipu(self) -> ProviderConfig:
+        """Backward-compatible alias for older configs/code that still reference `zhipu`."""
+        return self.zai
 
     def get_provider(self, model: str | None = None) -> ProviderConfig | None:
         """Get matched provider config (api_key, api_base, extra_headers). Falls back to first available."""

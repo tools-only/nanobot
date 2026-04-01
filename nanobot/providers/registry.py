@@ -241,12 +241,16 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     ),
     # Zhipu (智谱): OpenAI-compatible at open.bigmodel.cn
     ProviderSpec(
-        name="zhipu",
+        name="zai",
         keywords=("zhipu", "glm", "zai"),
         env_key="ZAI_API_KEY",
-        display_name="Zhipu AI",
+        display_name="Z.AI",
         backend="openai_compat",
-        env_extras=(("ZHIPUAI_API_KEY", "{api_key}"),),
+        env_extras=(
+            ("ZHIPUAI_API_KEY", "{api_key}"),
+            ("ZAI_API_BASE", "{api_base}"),
+            ("ZHIPUAI_API_BASE", "{api_base}"),
+        ),
         default_api_base="https://open.bigmodel.cn/api/paas/v4",
     ),
     # DashScope (通义): Qwen models, OpenAI-compatible endpoint
