@@ -28,6 +28,7 @@ from nanobot.bus.events import InboundMessage, OutboundMessage
 from nanobot.command import CommandContext, CommandRouter, register_builtin_commands
 from nanobot.bus.queue import MessageBus
 from nanobot.providers.base import LLMProvider
+from nanobot.personalization import PersonalizationGateway
 from nanobot.session.manager import Session, SessionManager
 
 if TYPE_CHECKING:
@@ -85,6 +86,7 @@ class AgentLoop:
         self._last_usage: dict[str, int] = {}
 
         self.context = ContextBuilder(workspace, timezone=timezone)
+        self.personalization = PersonalizationGateway(workspace)
         self.sessions = session_manager or SessionManager(workspace)
         self.tools = ToolRegistry()
         self.subagents = SubagentManager(
@@ -486,6 +488,7 @@ class AgentLoop:
 
         key = session_key or msg.session_key
         session = self.sessions.get_or_create(key)
+        plan = None
 
         # Slash commands
         raw = msg.content.strip()
@@ -501,9 +504,15 @@ class AgentLoop:
                 message_tool.start_turn()
 
         history = session.get_history(max_messages=0)
+        try:
+            # generate a personalization plan for the turn
+            plan = self.personalization.before_turn(msg, session, mcp_servers=self._mcp_servers)
+        except Exception as e:
+            logger.warning("Personalization before_turn failed: {}", e)
         initial_messages = self.context.build_messages(
             history=history,
             current_message=msg.content,
+            dynamic_blocks=plan.dynamic_blocks if plan else None,
             media=msg.media if msg.media else None,
             channel=msg.channel, chat_id=msg.chat_id,
         )
@@ -516,7 +525,7 @@ class AgentLoop:
                 channel=msg.channel, chat_id=msg.chat_id, content=content, metadata=meta,
             ))
 
-        final_content, _, all_msgs = await self._run_agent_loop(
+        final_content, tools_used, all_msgs = await self._run_agent_loop(
             initial_messages,
             on_progress=on_progress or _bus_progress,
             on_stream=on_stream,
@@ -528,11 +537,29 @@ class AgentLoop:
         if final_content is None:
             final_content = "I've completed processing but have no response to give."
 
-        self._save_turn(session, all_msgs, 1 + len(history))
+        skip = 1 + len(history)
+        new_messages = all_msgs[skip:]
+        self._save_turn(session, all_msgs, skip)
         self.sessions.save(session)
+        delivered_via_message_tool = bool(
+            (mt := self.tools.get("message")) and isinstance(mt, MessageTool) and mt._sent_in_turn
+        )
+        try:
+            self.personalization.after_turn(
+                msg=msg,
+                session=session,
+                plan=plan,
+                final_content=final_content,
+                new_messages=new_messages,
+                tools_used=tools_used,
+                usage=dict(self._last_usage),
+                delivered_via_message_tool=delivered_via_message_tool,
+            )
+        except Exception as e:
+            logger.warning("Personalization after_turn failed: {}", e)
         self._schedule_background(self.memory_consolidator.maybe_consolidate_by_tokens(session))
 
-        if (mt := self.tools.get("message")) and isinstance(mt, MessageTool) and mt._sent_in_turn:
+        if delivered_via_message_tool:
             return None
 
         preview = final_content[:120] + "..." if len(final_content) > 120 else final_content

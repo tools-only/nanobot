@@ -25,7 +25,11 @@ class ContextBuilder:
         self.memory = MemoryStore(workspace)
         self.skills = SkillsLoader(workspace)
 
-    def build_system_prompt(self, skill_names: list[str] | None = None) -> str:
+    def build_system_prompt(
+        self,
+        skill_names: list[str] | None = None,
+        dynamic_blocks: list[str] | None = None,
+    ) -> str:
         """Build the system prompt from identity, bootstrap files, memory, and skills."""
         parts = [self._get_identity()]
 
@@ -51,6 +55,11 @@ The following skills extend your capabilities. To use a skill, read its SKILL.md
 Skills with available="false" need dependencies installed first - you can try installing them with apt/brew.
 
 {skills_summary}""")
+
+        if dynamic_blocks:
+            cleaned = [block.strip() for block in dynamic_blocks if isinstance(block, str) and block.strip()]
+            if cleaned:
+                parts.append("# Adaptive Context\n\n" + "\n\n".join(cleaned))
 
         return "\n\n---\n\n".join(parts)
 
@@ -127,6 +136,7 @@ IMPORTANT: To send files (images, documents, audio, video) to the user, you MUST
         history: list[dict[str, Any]],
         current_message: str,
         skill_names: list[str] | None = None,
+        dynamic_blocks: list[str] | None = None,
         media: list[str] | None = None,
         channel: str | None = None,
         chat_id: str | None = None,
@@ -144,7 +154,7 @@ IMPORTANT: To send files (images, documents, audio, video) to the user, you MUST
             merged = [{"type": "text", "text": runtime_ctx}] + user_content
 
         return [
-            {"role": "system", "content": self.build_system_prompt(skill_names)},
+            {"role": "system", "content": self.build_system_prompt(skill_names, dynamic_blocks=dynamic_blocks)},
             *history,
             {"role": current_role, "content": merged},
         ]
