@@ -72,6 +72,8 @@ class InMemoryKnowledgeStore(KnowledgeStore):
         for artifact in self._artifacts.values():
             if artifact.layer not in query.layers:
                 continue
+            if query.kinds and artifact.kind not in query.kinds:
+                continue
             haystack = f"{artifact.title}\n{artifact.summary or ''}\n{artifact.content}".lower()
             score = 0.0
             if query_text and query_text in haystack:
@@ -107,10 +109,16 @@ class PassthroughKnowledgeCompiler(KnowledgeCompiler):
                 layer=target_layer,
                 title=artifact.title,
                 content=artifact.content,
+                kind=artifact.kind,
+                status=artifact.status,
+                claim_type=artifact.claim_type,
                 summary=artifact.summary,
                 tags=list(artifact.tags),
                 links=list(artifact.links),
                 citations=list(artifact.citations),
+                derived_from=list(artifact.derived_from),
+                related_notes=list(artifact.related_notes),
+                confidence=artifact.confidence,
                 metadata=dict(artifact.metadata),
             ))
         return out

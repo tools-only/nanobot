@@ -1126,7 +1126,12 @@ def _build_knowledge_stack():
     runtime = KnowledgeRuntime(workspace, store=FilesystemKnowledgeStore(knowledge_root))
     runtime.register_adapter(XiaohongshuKnowledgeAdapter())
     obsidian = ObsidianFrontend(workspace, config.knowledge.obsidian, knowledge_root=knowledge_root)
-    collector = XiaohongshuKnowledgeCollector(runtime, knowledge_root, config.knowledge.xiaohongshu)
+    collector = XiaohongshuKnowledgeCollector(
+        runtime,
+        knowledge_root,
+        config.knowledge.xiaohongshu,
+        config.knowledge.expansion,
+    )
     expansion = KnowledgeExpansionWorker(
         knowledge_root,
         config=config.knowledge.expansion,
@@ -1150,6 +1155,7 @@ def knowledge_status():
     console.print("\n[bold]Expansion[/bold]")
     console.print_json(json.dumps({
         "enabled": expansion.config.enabled,
+        "auto_queue_on_ingest": expansion.config.auto_queue_on_ingest,
         "auto_run_on_ingest": expansion.config.auto_run_on_ingest,
         "allow_web_search": expansion.config.allow_web_search,
         "queue_dir": str(expansion.state_dir),
@@ -1200,13 +1206,16 @@ def knowledge_xhs_status():
 @knowledge_xhs_app.command("collect-url")
 def knowledge_xhs_collect_url(
     url: str = typer.Argument(..., help="Xiaohongshu note URL"),
+    queue_expansion: bool = typer.Option(False, "--queue-expansion", help="Queue a high-level synthesis job"),
 ):
     """Collect one Xiaohongshu note into the knowledge base."""
     _, _, _, _, collector, _ = _build_knowledge_stack()
-    result = collector.collect_from_message(text=url, user_key="cli:manual", channel="cli")
-    if result is None:
-        console.print("[yellow]No Xiaohongshu URL detected or collection disabled.[/yellow]")
-        raise typer.Exit(1)
+    result = collector.collect_url(
+        url=url,
+        user_key="cli:manual",
+        channel="cli",
+        queue_expansion=queue_expansion,
+    )
     console.print_json(json.dumps({
         "mode": result.mode,
         "query": result.query,
@@ -1220,12 +1229,13 @@ def knowledge_xhs_scan_topic(
     topic: str = typer.Argument(..., help="Topic to scan"),
     sort: str = typer.Option("latest", "--sort", help="XHS sort mode"),
     limit: int = typer.Option(3, "--limit", "-n", help="Max notes to ingest"),
+    queue_expansion: bool = typer.Option(False, "--queue-expansion", help="Queue synthesis jobs for collected notes"),
 ):
     """Run an active Xiaohongshu topic scan into the knowledge base."""
     from nanobot.knowledge import build_topic_scan_note
 
     _, knowledge_root, _, _, collector, _ = _build_knowledge_stack()
-    result = collector.collect_topic(topic=topic, sort=sort, limit=limit)
+    result = collector.collect_topic(topic=topic, sort=sort, limit=limit, queue_expansion=queue_expansion)
     note = build_topic_scan_note(knowledge_root, topic=topic, result=result)
     console.print_json(json.dumps({
         "mode": result.mode,
@@ -1248,6 +1258,29 @@ def knowledge_expand_run(
         "processed": len(outputs),
         "notes": [str(path) for path in outputs],
     }, ensure_ascii=False))
+
+
+@knowledge_expand_app.command("enqueue-note")
+def knowledge_expand_enqueue_note(
+    path: str = typer.Argument(..., help="Vault-relative note path"),
+):
+    """Queue one existing note for explicit high-level synthesis."""
+    _, knowledge_root, _, _, _, _ = _build_knowledge_stack()
+    from nanobot.knowledge import KnowledgeFusionManager
+
+    note_path = (knowledge_root / path).resolve()
+    if not note_path.exists() or not note_path.is_file():
+        console.print(f"[red]Note not found:[/red] {path}")
+        raise typer.Exit(1)
+    try:
+        note_path.relative_to(knowledge_root.resolve())
+    except ValueError:
+        console.print(f"[red]Path escapes knowledge root:[/red] {path}")
+        raise typer.Exit(1)
+
+    manager = KnowledgeFusionManager(knowledge_root)
+    job = manager.enqueue_note_path(note_path, user_key="cli:manual", channel="cli")
+    console.print_json(json.dumps(job.to_dict(), ensure_ascii=False))
 
 
 # ============================================================================

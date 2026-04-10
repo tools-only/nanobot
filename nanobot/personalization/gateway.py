@@ -50,6 +50,7 @@ class PersonalizationGateway:
             self.knowledge,
             self.knowledge_root,
             self.config.knowledge.xiaohongshu,
+            self.config.knowledge.expansion,
         )
         self.expansion = KnowledgeExpansionWorker(
             self.knowledge_root,

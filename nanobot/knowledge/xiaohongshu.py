@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from nanobot.config.schema import XiaohongshuCLIConfig
+from nanobot.config.schema import KnowledgeExpansionConfig, XiaohongshuCLIConfig
 from nanobot.knowledge.base import CLIKnowledgeAdapter
 from nanobot.knowledge.cli_runner import ExternalCLI
 from nanobot.knowledge.contracts import (
@@ -49,73 +49,92 @@ class XiaohongshuKnowledgeAdapter(CLIKnowledgeAdapter):
         note = self._unwrap(payload)
         title = self._get(note, "title", "note_title", "name") or "Xiaohongshu Note"
         desc = self._get(note, "desc", "description", "content", "note_text") or ""
+        author = self._get(note, "user_name", "author", "nickname", "user")
         note_url = request.metadata.get("url") or self._get(note, "note_url", "url", "share_url")
         tags = self._extract_tags(note)
+        stats = self._extract_stats(note)
+        mentions = self._extract_mentions(request.metadata.get("comments", ""))
         content_lines = [
             f"# {title}",
             "",
             f"- Mode: {mode}",
         ]
+        if author:
+            content_lines.append(f"- Author: {author}")
         if note_url:
             content_lines.append(f"- Source URL: {note_url}")
         if tags:
             content_lines.append(f"- Tags: {', '.join(tags)}")
+        if stats:
+            stats_text = ", ".join(f"{key}={value}" for key, value in stats.items())
+            content_lines.append(f"- Stats: {stats_text}")
         content_lines.extend(["", desc or "(empty)"])
         if request.metadata.get("comments"):
             content_lines.extend(["", "## Comments", "", request.metadata["comments"]])
 
         outbound_links = self._extract_links(desc)
         summary = desc[:280] if desc else title
-        artifacts = [
-            self.build_artifact(
-                source=request.source,
-                layer="raw",
+        raw_artifact = self.build_artifact(
+            source=request.source,
+            layer="raw",
+            title=title,
+            content=self.coerce_text(payload),
+            kind="archive",
+            summary=summary,
+            tags=tags,
+            citations=[note_url] if note_url else [],
+            metadata={
+                "mode": mode,
+                "vault_dir": "raw/xiaohongshu",
+                "vault_name": title,
+                **request.metadata,
+            },
+        )
+        parsed_artifact = self.build_artifact(
+            source=request.source,
+            layer="parsed",
+            title=f"{title} Structured Extract",
+            content=self._build_structured_extract(
                 title=title,
-                content=self.coerce_text(payload),
-                summary=summary,
+                author=author,
+                note_url=note_url,
                 tags=tags,
-                citations=[note_url] if note_url else [],
-                metadata={
-                    "mode": mode,
-                    "vault_dir": "collections/xiaohongshu/raw",
-                    "vault_name": title,
-                    **request.metadata,
-                },
+                stats=stats,
+                mentions=mentions,
+                desc=desc,
             ),
-            self.build_artifact(
-                source=request.source,
-                layer="canonical",
-                title=title,
-                content="\n".join(content_lines).strip(),
-                summary=summary,
-                tags=tags,
-                links=outbound_links,
-                citations=[note_url] if note_url else [],
-                metadata={
-                    "mode": mode,
-                    "vault_dir": "collections/xiaohongshu/canonical",
-                    "vault_name": title,
-                    **request.metadata,
-                },
-            ),
-            self.build_artifact(
-                source=request.source,
-                layer="synthesis",
-                title=f"{title} Research Seeds",
-                content=self._build_research_seed(title=title, desc=desc, tags=tags, links=outbound_links),
-                summary=f"Research follow-ups extracted from {title}",
-                tags=tags,
-                links=outbound_links,
-                citations=[note_url] if note_url else [],
-                metadata={
-                    "mode": mode,
-                    "kind": "research_seed",
-                    "vault_dir": "research/xiaohongshu",
-                    "vault_name": f"{title} Research Seeds",
-                    **request.metadata,
-                },
-            ),
-        ]
+            kind="archive",
+            summary=f"Structured fields extracted from {title}",
+            tags=tags,
+            links=outbound_links,
+            citations=[note_url] if note_url else [],
+            derived_from=[raw_artifact.artifact_id],
+            metadata={
+                "mode": mode,
+                "vault_dir": "parsed/xiaohongshu",
+                "vault_name": f"{title} Structured Extract",
+                **request.metadata,
+            },
+        )
+        canonical_artifact = self.build_artifact(
+            source=request.source,
+            layer="canonical",
+            title=title,
+            content="\n".join(content_lines).strip(),
+            kind="archive",
+            summary=summary,
+            tags=tags,
+            links=outbound_links,
+            citations=[note_url] if note_url else [],
+            derived_from=[raw_artifact.artifact_id, parsed_artifact.artifact_id],
+            metadata={
+                "mode": mode,
+                "vault_dir": "canonical/archive/xiaohongshu",
+                "vault_name": title,
+                **request.metadata,
+            },
+        )
+        artifacts = [raw_artifact, parsed_artifact, canonical_artifact]
         return KnowledgeIngestResult(
             source=request.source,
             artifacts=artifacts,
@@ -154,22 +173,66 @@ class XiaohongshuKnowledgeAdapter(CLIKnowledgeAdapter):
         return sorted(set(match.group(0) for match in _URL_RE.finditer(text)))
 
     @staticmethod
-    def _build_research_seed(*, title: str, desc: str, tags: list[str], links: list[str]) -> str:
-        related_queries = [title, *tags[:5]]
+    def _extract_stats(payload: dict[str, Any]) -> dict[str, int]:
+        keys = {
+            "likes": ("likes", "liked_count", "like_count"),
+            "collected": ("collected", "collect_count", "collected_count"),
+            "comments": ("comments", "comment_count"),
+            "shares": ("shares", "share_count"),
+        }
+        stats: dict[str, int] = {}
+        for output_key, candidates in keys.items():
+            for key in candidates:
+                value = payload.get(key)
+                if isinstance(value, int):
+                    stats[output_key] = value
+                    break
+        return stats
+
+    @staticmethod
+    def _extract_mentions(comments_text: str) -> list[str]:
+        mentions: list[str] = []
+        for line in comments_text.splitlines():
+            if "@" not in line:
+                continue
+            mentions.append(line.strip())
+        return mentions[:20]
+
+    @staticmethod
+    def _build_structured_extract(
+        *,
+        title: str,
+        author: str | None,
+        note_url: str | None,
+        tags: list[str],
+        stats: dict[str, int],
+        mentions: list[str],
+        desc: str,
+    ) -> str:
         lines = [
-            f"# Research Seeds for {title}",
+            f"# Structured Extract for {title}",
             "",
-            "## Suggested Follow-up Queries",
+            "## Core Fields",
             "",
         ]
-        for query in related_queries:
-            lines.append(f"- {query}")
-        lines.extend(["", "## Referenced Links", ""])
-        if links:
-            for link in links:
-                lines.append(f"- {link}")
+        lines.append(f"- Title: {title}")
+        if author:
+            lines.append(f"- Author: {author}")
+        if note_url:
+            lines.append(f"- Source URL: {note_url}")
+        lines.append(f"- Tags: {', '.join(tags) if tags else 'None'}")
+        if stats:
+            lines.append("- Stats:")
+            for key, value in stats.items():
+                lines.append(f"  - {key}: {value}")
         else:
-            lines.append("- None extracted from the note body")
+            lines.append("- Stats: None")
+        lines.extend(["", "## Mention Signals", ""])
+        if mentions:
+            for mention in mentions:
+                lines.append(f"- {mention}")
+        else:
+            lines.append("- None")
         lines.extend(["", "## Source Excerpt", "", desc or "(empty)"])
         return "\n".join(lines)
 
@@ -208,10 +271,17 @@ class XiaohongshuCLI:
 class XiaohongshuKnowledgeCollector:
     """Passive and active knowledge collection driven by xiaohongshu-cli."""
 
-    def __init__(self, runtime: KnowledgeRuntime, root: Path, config: XiaohongshuCLIConfig):
+    def __init__(
+        self,
+        runtime: KnowledgeRuntime,
+        root: Path,
+        config: XiaohongshuCLIConfig,
+        expansion_config: KnowledgeExpansionConfig | None = None,
+    ):
         self.runtime = runtime
         self.root = root
         self.config = config
+        self.expansion_config = expansion_config or KnowledgeExpansionConfig()
         self.cli = XiaohongshuCLI(config)
         self.fusion = KnowledgeFusionManager(root)
 
@@ -219,7 +289,38 @@ class XiaohongshuKnowledgeCollector:
     def extract_urls(text: str) -> list[str]:
         return sorted(set(match.group(0) for match in _XHS_URL_RE.finditer(text or "")))
 
-    def collect_from_message(self, *, text: str, user_key: str, channel: str) -> XiaohongshuCollectionResult | None:
+    def collect_url(
+        self,
+        *,
+        url: str,
+        user_key: str,
+        channel: str,
+        queue_expansion: bool | None = None,
+    ) -> XiaohongshuCollectionResult:
+        warnings: list[str] = []
+        artifacts, jobs = self._collect_url(
+            url=url,
+            user_key=user_key,
+            channel=channel,
+            warnings=warnings,
+            mode="manual_collect",
+            queue_expansion=queue_expansion,
+        )
+        return XiaohongshuCollectionResult(
+            mode="active",
+            query=url,
+            artifacts=[*artifacts, *jobs],
+            warnings=warnings,
+        )
+
+    def collect_from_message(
+        self,
+        *,
+        text: str,
+        user_key: str,
+        channel: str,
+        queue_expansion: bool | None = None,
+    ) -> XiaohongshuCollectionResult | None:
         if not self.config.enabled or not self.config.auto_collect_shared_links:
             return None
         if self.config.passive_allowed_channels and channel not in self.config.passive_allowed_channels:
@@ -231,7 +332,13 @@ class XiaohongshuKnowledgeCollector:
         expansion_jobs: list[dict[str, Any]] = []
         warnings: list[str] = []
         for url in urls:
-            collected, jobs = self._collect_url(url=url, user_key=user_key, channel=channel, warnings=warnings)
+            collected, jobs = self._collect_url(
+                url=url,
+                user_key=user_key,
+                channel=channel,
+                warnings=warnings,
+                queue_expansion=queue_expansion,
+            )
             artifacts.extend(collected)
             expansion_jobs.extend(jobs)
         return XiaohongshuCollectionResult(
@@ -241,7 +348,14 @@ class XiaohongshuKnowledgeCollector:
             warnings=warnings,
         )
 
-    def collect_topic(self, *, topic: str, sort: str = "latest", limit: int | None = None) -> XiaohongshuCollectionResult:
+    def collect_topic(
+        self,
+        *,
+        topic: str,
+        sort: str = "latest",
+        limit: int | None = None,
+        queue_expansion: bool | None = None,
+    ) -> XiaohongshuCollectionResult:
         limit = limit or self.config.active_default_limit
         warnings: list[str] = []
         artifacts: list[dict[str, Any]] = []
@@ -264,6 +378,7 @@ class XiaohongshuKnowledgeCollector:
                 warnings=warnings,
                 mode="active_topic_scan",
                 query=topic,
+                queue_expansion=queue_expansion,
             )
             artifacts.extend(collected)
             expansion_jobs.extend(jobs)
@@ -283,6 +398,7 @@ class XiaohongshuKnowledgeCollector:
         warnings: list[str],
         mode: str = "passive_share",
         query: str | None = None,
+        queue_expansion: bool | None = None,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         if not self.cli.available():
             self._queue_url(url=url, user_key=user_key, mode=mode, query=query)
@@ -313,14 +429,19 @@ class XiaohongshuKnowledgeCollector:
             metadata={"provider": "xiaohongshu", "mode": mode, "url": url, "query": query, "comments": comments_text},
         )
         result = self.runtime.ingest(request)
-        expansion_job = self.fusion.enqueue(self._build_expansion_job(
-            note=note,
-            url=url,
-            user_key=user_key,
-            channel=channel,
-            query=query,
-        ))
-        return [artifact.to_dict() for artifact in result.artifacts], [expansion_job.to_dict()]
+        should_queue = self.expansion_config.auto_queue_on_ingest if queue_expansion is None else queue_expansion
+        expansion_jobs: list[dict[str, Any]] = []
+        if should_queue:
+            expansion_job = self.fusion.enqueue(self._build_expansion_job(
+                note=note,
+                url=url,
+                user_key=user_key,
+                channel=channel,
+                query=query,
+                artifact_ids=[artifact.artifact_id for artifact in result.artifacts],
+            ))
+            expansion_jobs.append(expansion_job.to_dict())
+        return [artifact.to_dict() for artifact in result.artifacts], expansion_jobs
 
     def _queue_url(self, *, url: str, user_key: str, mode: str, query: str | None) -> None:
         path = self.root / "inbox" / "xiaohongshu_url_queue.jsonl"
@@ -373,6 +494,7 @@ class XiaohongshuKnowledgeCollector:
         user_key: str,
         channel: str,
         query: str | None,
+        artifact_ids: list[str],
     ) -> KnowledgeExpansionJob:
         unwrapped = XiaohongshuKnowledgeAdapter._unwrap(note)
         title = XiaohongshuKnowledgeAdapter._get(unwrapped, "title", "note_title", "name") or "Xiaohongshu Note"
@@ -393,6 +515,7 @@ class XiaohongshuKnowledgeCollector:
             suggested_queries=suggested_queries,
             tags=tags,
             excerpt=desc[:1000] if desc else None,
+            derived_from=artifact_ids,
             metadata={"provider": "xiaohongshu"},
         )
 

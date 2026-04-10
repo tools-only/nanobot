@@ -23,6 +23,7 @@
 > [!IMPORTANT]
 > **Security note:** Due to `litellm` supply chain poisoning, **please check your Python environment ASAP** and refer to this [advisory](https://github.com/HKUDS/nanobot/discussions/2445) for details. We have fully removed the `litellm` dependency in [this commit](https://github.com/HKUDS/nanobot/commit/3dfdab7).
 
+- **2026-04-11** 🚀 Released **v0.1.4.post6** — layered knowledge now defaults to low-level archiving (`raw` / `parsed` / `canonical/archive`), high-level synthesis is explicit and traceable, legacy YAML vault notes are queryable, and the knowledge CLI now supports explicit promotion. See [release notes](docs/releases/v0.1.4.post6.md).
 - **2026-03-21** 🔒 Replace `litellm` with native `openai` + `anthropic` SDKs. Please see [commit](https://github.com/HKUDS/nanobot/commit/3dfdab7).
 - **2026-03-20** 🧙 Interactive setup wizard — pick your provider, model autocomplete, and you're good to go.
 - **2026-03-19** 💬 Telegram gets more resilient under load; Feishu now renders code blocks properly.

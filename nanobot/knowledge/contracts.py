@@ -7,6 +7,9 @@ from typing import Any, Literal
 
 
 KnowledgeLayer = Literal["raw", "parsed", "canonical", "synthesis"]
+KnowledgeKind = Literal["archive", "concept", "topic", "fusion"]
+KnowledgeStatus = Literal["active", "queued", "reviewed", "deprecated"]
+KnowledgeClaimType = Literal["fact", "synthesis", "hypothesis"]
 KnowledgePlatform = Literal["filesystem", "web", "mcp", "obsidian", "api", "cli", "custom"]
 
 
@@ -34,10 +37,16 @@ class KnowledgeArtifact:
     layer: KnowledgeLayer
     title: str
     content: str
+    kind: KnowledgeKind = "archive"
+    status: KnowledgeStatus = "active"
+    claim_type: KnowledgeClaimType = "fact"
     summary: str | None = None
     tags: list[str] = field(default_factory=list)
     links: list[str] = field(default_factory=list)
     citations: list[str] = field(default_factory=list)
+    derived_from: list[str] = field(default_factory=list)
+    related_notes: list[str] = field(default_factory=list)
+    confidence: float | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -87,6 +96,7 @@ class KnowledgeQuery:
     user_key: str | None = None
     namespace: str = "shared"
     layers: list[KnowledgeLayer] = field(default_factory=lambda: ["canonical", "synthesis"])
+    kinds: list[KnowledgeKind] = field(default_factory=list)
     tags: list[str] = field(default_factory=list)
     max_results: int = 5
     metadata: dict[str, Any] = field(default_factory=dict)

@@ -23,12 +23,18 @@ class ObsidianFrontend:
         ensure_dir(self.vault_path)
         for folder in (
             "raw",
+            "raw/xiaohongshu",
             "parsed",
+            "parsed/xiaohongshu",
             "canonical",
+            "canonical/archive",
+            "canonical/archive/xiaohongshu",
+            "canonical/concepts",
             "synthesis",
+            "synthesis/topics",
+            "synthesis/fusion",
             "inbox",
-            "collections/xiaohongshu/raw",
-            "collections/xiaohongshu/canonical",
+            "collections/xiaohongshu",
             "research/xiaohongshu",
             "research/expansion_queue",
         ):
@@ -38,11 +44,13 @@ class ObsidianFrontend:
         if not index.exists():
             index.write_text(
                 "# Knowledge Vault\n\n"
-                "- `canonical/`: stable notes\n"
-                "- `synthesis/`: higher-level summaries\n"
                 "- `raw/`: source captures\n"
-                "- `collections/xiaohongshu/`: XiaoHongShu archives\n"
-                "- `research/`: enrichment and topic scan outputs\n",
+                "- `parsed/`: structured extracts without interpretation\n"
+                "- `canonical/archive/`: normalized archive notes\n"
+                "- `canonical/concepts/`: stable single-concept notes\n"
+                "- `synthesis/topics/`: cross-source topic notes\n"
+                "- `synthesis/fusion/`: high-level linked synthesis notes\n"
+                "- `research/expansion_queue/`: explicit promotion queue\n",
                 encoding="utf-8",
             )
 

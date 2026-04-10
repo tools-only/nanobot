@@ -9,11 +9,14 @@ from typing import Any
 from nanobot.knowledge.contracts import (
     KnowledgeArtifact,
     KnowledgeCandidate,
+    KnowledgeClaimType,
     KnowledgeIngestRequest,
     KnowledgeIngestResult,
+    KnowledgeKind,
     KnowledgeLayer,
     KnowledgeQuery,
     KnowledgeRetentionDecision,
+    KnowledgeStatus,
     KnowledgeSourceSpec,
 )
 
@@ -72,11 +75,17 @@ class BaseKnowledgeSourceAdapter(KnowledgeSourceAdapter):
         layer: KnowledgeLayer,
         title: str,
         content: str,
+        kind: KnowledgeKind = "archive",
+        status: KnowledgeStatus = "active",
+        claim_type: KnowledgeClaimType = "fact",
         artifact_id: str | None = None,
         summary: str | None = None,
         tags: list[str] | None = None,
         links: list[str] | None = None,
         citations: list[str] | None = None,
+        derived_from: list[str] | None = None,
+        related_notes: list[str] | None = None,
+        confidence: float | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> KnowledgeArtifact:
         if artifact_id is None:
@@ -88,10 +97,16 @@ class BaseKnowledgeSourceAdapter(KnowledgeSourceAdapter):
             layer=layer,
             title=title,
             content=content,
+            kind=kind,
+            status=status,
+            claim_type=claim_type,
             summary=summary,
             tags=list(tags or []),
             links=list(links or []),
             citations=list(citations or []),
+            derived_from=list(derived_from or []),
+            related_notes=list(related_notes or []),
+            confidence=confidence,
             metadata=dict(metadata or {}),
         )
 

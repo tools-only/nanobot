@@ -179,7 +179,8 @@ class KnowledgeExpansionConfig(Base):
     """Background knowledge fusion and expansion settings."""
 
     enabled: bool = True
-    auto_run_on_ingest: bool = True
+    auto_queue_on_ingest: bool = False
+    auto_run_on_ingest: bool = False
     max_queries_per_job: int = Field(default=3, ge=1, le=10)
     max_links_per_job: int = Field(default=8, ge=0, le=50)
     allow_web_search: bool = False

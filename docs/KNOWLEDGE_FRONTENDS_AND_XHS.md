@@ -8,16 +8,16 @@ The knowledge vault is now scaffolded under the workspace knowledge root and can
 
 Current vault layout:
 
-- `raw/`
-- `parsed/`
-- `canonical/`
-- `synthesis/`
+- `raw/xiaohongshu/`
+- `parsed/xiaohongshu/`
+- `canonical/archive/xiaohongshu/`
+- `canonical/concepts/`
+- `synthesis/topics/`
+- `synthesis/fusion/`
 - `inbox/`
-- `collections/xiaohongshu/raw/`
-- `collections/xiaohongshu/canonical/`
+- `collections/xiaohongshu/`
 - `research/xiaohongshu/`
 - `research/expansion_queue/`
-- `research/fusion/`
 
 Obsidian integration is intentionally lightweight:
 - we do not require Obsidian for backend storage
@@ -72,7 +72,8 @@ Config keys:
     },
     "expansion": {
       "enabled": true,
-      "autoRunOnIngest": true,
+      "autoQueueOnIngest": false,
+      "autoRunOnIngest": false,
       "maxQueriesPerJob": 3,
       "maxLinksPerJob": 8,
       "allowWebSearch": false
@@ -90,11 +91,12 @@ When a user message contains a Xiaohongshu URL:
 3. optional comments are fetched with `xhs comments`
 4. the payload is normalized into layered artifacts:
    - `raw`
+   - `parsed`
    - `canonical`
-   - `synthesis`
-5. an expansion job is queued
-6. a lightweight fusion note is generated automatically
-7. the turn log records the resulting knowledge activity
+5. by default, no high-level synthesis is created on ingest
+6. if explicit promotion is requested, an expansion job is queued
+7. promoted jobs materialize into `synthesis/fusion/`
+8. the turn log records the resulting knowledge activity
 
 If `xhs` is unavailable, the URL is queued into:
 
@@ -122,7 +124,10 @@ The command also emits a compact research note under:
 - `nanobot knowledge obsidian open canonical/example.md`
 - `nanobot knowledge xhs status`
 - `nanobot knowledge xhs collect-url "<url>"`
+- `nanobot knowledge xhs collect-url "<url>" --queue-expansion`
 - `nanobot knowledge xhs scan-topic "agentic rl" --sort latest --limit 3`
+- `nanobot knowledge xhs scan-topic "agentic rl" --sort latest --limit 3 --queue-expansion`
+- `nanobot knowledge expand enqueue-note canonical/archive/xiaohongshu/example.md`
 - `nanobot knowledge expand run`
 - `nanobot knowledge expand run --with-search`
 
@@ -133,12 +138,12 @@ Implemented:
 - passive link detection
 - active topic scan entry point
 - filesystem-backed vault persistence
-- layered artifact generation for Xiaohongshu ingests
-- automatic expansion-queue generation
-- automatic lightweight fusion-note generation on ingest
+- layered artifact generation for Xiaohongshu ingests with low-level default archiving
+- explicit expansion-queue generation
+- explicit synthesis/fusion promotion
 - manual expansion worker with optional web search
 - Discord-first passive collection defaults
-- auto archive into Xiaohongshu collections inside the vault
+- auto archive into `raw/`, `parsed/`, and `canonical/archive/` inside the vault
 - expansion queue persistence and completion tracking
 
 Not implemented yet:
@@ -148,7 +153,7 @@ Not implemented yet:
 
 ## Background Fusion and Expansion
 
-After a Xiaohongshu post is archived, the system now also creates a background expansion job.
+After a Xiaohongshu post is archived, the system can optionally create a background expansion job.
 
 Queue files:
 
@@ -158,20 +163,22 @@ Queue files:
 Generated notes:
 
 - `knowledge/research/expansion_queue/`
-- `knowledge/research/fusion/`
+- `knowledge/synthesis/fusion/`
 
 Behavior:
 
 - On Discord passive share ingest:
-  - archive raw/canonical/synthesis notes
-  - enqueue an expansion job
-  - automatically generate a lightweight fusion note without network calls
+  - archive raw/parsed/canonical notes
+  - do not synthesize by default
+- For explicit promotion:
+  - run `nanobot knowledge xhs collect-url "<url>" --queue-expansion`
+  - or run `nanobot knowledge expand enqueue-note <vault-relative-path>`
+  - then run `nanobot knowledge expand run`
 - For heavier enrichment:
-  - run `nanobot knowledge expand run`
   - optionally run `nanobot knowledge expand run --with-search` if web search is enabled
 
 The expansion worker currently:
 - classifies outbound links as papers / code / blogs / other
 - trims and normalizes suggested follow-up queries
-- builds a reusable fusion note
+- builds a traceable fusion note with `derived_from`
 - optionally runs lightweight web search over selected queries
