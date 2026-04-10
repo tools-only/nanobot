@@ -10,6 +10,7 @@ KnowledgeLayer = Literal["raw", "parsed", "canonical", "synthesis"]
 KnowledgeKind = Literal["archive", "concept", "topic", "fusion"]
 KnowledgeStatus = Literal["active", "queued", "reviewed", "deprecated"]
 KnowledgeClaimType = Literal["fact", "synthesis", "hypothesis"]
+KnowledgeDomain = Literal["finance", "paper", "agent", "rl", "llm", "infra", "product", "policy", "biology", "other"]
 KnowledgePlatform = Literal["filesystem", "web", "mcp", "obsidian", "api", "cli", "custom"]
 
 
@@ -40,12 +41,16 @@ class KnowledgeArtifact:
     kind: KnowledgeKind = "archive"
     status: KnowledgeStatus = "active"
     claim_type: KnowledgeClaimType = "fact"
+    domain: KnowledgeDomain = "other"
+    subdomain: str | None = None
+    cross_domain: bool = False
     summary: str | None = None
     tags: list[str] = field(default_factory=list)
     links: list[str] = field(default_factory=list)
     citations: list[str] = field(default_factory=list)
     derived_from: list[str] = field(default_factory=list)
     related_notes: list[str] = field(default_factory=list)
+    bridges: list[KnowledgeDomain] = field(default_factory=list)
     confidence: float | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -97,6 +102,7 @@ class KnowledgeQuery:
     namespace: str = "shared"
     layers: list[KnowledgeLayer] = field(default_factory=lambda: ["canonical", "synthesis"])
     kinds: list[KnowledgeKind] = field(default_factory=list)
+    domains: list[KnowledgeDomain] = field(default_factory=list)
     tags: list[str] = field(default_factory=list)
     max_results: int = 5
     metadata: dict[str, Any] = field(default_factory=dict)

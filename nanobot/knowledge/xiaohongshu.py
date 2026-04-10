@@ -54,11 +54,16 @@ class XiaohongshuKnowledgeAdapter(CLIKnowledgeAdapter):
         tags = self._extract_tags(note)
         stats = self._extract_stats(note)
         mentions = self._extract_mentions(request.metadata.get("comments", ""))
+        domain = self._infer_domain(title=title, desc=desc, tags=tags, note=note)
+        subdomain = self._infer_subdomain(tags=tags, title=title)
         content_lines = [
             f"# {title}",
             "",
             f"- Mode: {mode}",
         ]
+        content_lines.append(f"- Domain: {domain}")
+        if subdomain:
+            content_lines.append(f"- Subdomain: {subdomain}")
         if author:
             content_lines.append(f"- Author: {author}")
         if note_url:
@@ -80,12 +85,14 @@ class XiaohongshuKnowledgeAdapter(CLIKnowledgeAdapter):
             title=title,
             content=self.coerce_text(payload),
             kind="archive",
+            domain=domain,
+            subdomain=subdomain,
             summary=summary,
             tags=tags,
             citations=[note_url] if note_url else [],
             metadata={
                 "mode": mode,
-                "vault_dir": "raw/xiaohongshu",
+                "vault_dir": f"raw/xiaohongshu/{domain}",
                 "vault_name": title,
                 **request.metadata,
             },
@@ -96,6 +103,8 @@ class XiaohongshuKnowledgeAdapter(CLIKnowledgeAdapter):
             title=f"{title} Structured Extract",
             content=self._build_structured_extract(
                 title=title,
+                domain=domain,
+                subdomain=subdomain,
                 author=author,
                 note_url=note_url,
                 tags=tags,
@@ -104,6 +113,8 @@ class XiaohongshuKnowledgeAdapter(CLIKnowledgeAdapter):
                 desc=desc,
             ),
             kind="archive",
+            domain=domain,
+            subdomain=subdomain,
             summary=f"Structured fields extracted from {title}",
             tags=tags,
             links=outbound_links,
@@ -111,7 +122,7 @@ class XiaohongshuKnowledgeAdapter(CLIKnowledgeAdapter):
             derived_from=[raw_artifact.artifact_id],
             metadata={
                 "mode": mode,
-                "vault_dir": "parsed/xiaohongshu",
+                "vault_dir": f"parsed/xiaohongshu/{domain}",
                 "vault_name": f"{title} Structured Extract",
                 **request.metadata,
             },
@@ -122,6 +133,8 @@ class XiaohongshuKnowledgeAdapter(CLIKnowledgeAdapter):
             title=title,
             content="\n".join(content_lines).strip(),
             kind="archive",
+            domain=domain,
+            subdomain=subdomain,
             summary=summary,
             tags=tags,
             links=outbound_links,
@@ -129,7 +142,7 @@ class XiaohongshuKnowledgeAdapter(CLIKnowledgeAdapter):
             derived_from=[raw_artifact.artifact_id, parsed_artifact.artifact_id],
             metadata={
                 "mode": mode,
-                "vault_dir": "canonical/archive/xiaohongshu",
+                "vault_dir": f"canonical/archive/{domain}/xiaohongshu",
                 "vault_name": title,
                 **request.metadata,
             },
@@ -199,9 +212,73 @@ class XiaohongshuKnowledgeAdapter(CLIKnowledgeAdapter):
         return mentions[:20]
 
     @staticmethod
+    def _infer_domain(*, title: str, desc: str, tags: list[str], note: dict[str, Any]) -> str:
+        text = " ".join([
+            title,
+            desc,
+            " ".join(tags),
+            str(note.get("venue", "")),
+            str(note.get("arxiv", "")),
+        ]).lower()
+        if any(keyword in text for keyword in (
+            "finance", "financial", "macro", "stock", "equity", "bond", "trading", "market",
+            "crypto", "bitcoin", "eth", "基金", "股票", "金融", "宏观", "交易", "投资", "美股", "a股",
+        )):
+            return "finance"
+        if any(keyword in text for keyword in (
+            "neurips", "iclr", "icml", "acl", "emnlp", "arxiv", "paper", "survey", "综述", "论文",
+        )):
+            return "paper"
+        if any(keyword in text for keyword in (
+            "agent", "agentic", "multi-agent", "智能体", "agent-based",
+        )):
+            return "agent"
+        if any(keyword in text for keyword in (
+            "reinforcement learning", "reward model", "policy gradient", "credit assignment", "bandit",
+            "强化学习", "奖励模型", "策略梯度", "credit assignment", "rlhf", "grpo",
+        )):
+            return "rl"
+        if any(keyword in text for keyword in (
+            "llm", "language model", "transformer", "latent space", "embedding", "token",
+            "大模型", "语言模型", "transformer", "潜在空间", "表征学习",
+        )):
+            return "llm"
+        if any(keyword in text for keyword in (
+            "infra", "system design", "distributed", "database", "storage", "vector db",
+            "基础设施", "系统设计", "数据库", "部署", "架构",
+        )):
+            return "infra"
+        if any(keyword in text for keyword in (
+            "product", "growth", "retention", "conversion", "pmf", "用户增长", "转化", "留存", "产品",
+        )):
+            return "product"
+        if any(keyword in text for keyword in (
+            "policy", "regulation", "compliance", "governance", "监管", "政策", "合规", "治理",
+        )):
+            return "policy"
+        if any(keyword in text for keyword in (
+            "biology", "genome", "protein", "cell", "biology", "生物", "蛋白", "基因", "细胞",
+        )):
+            return "biology"
+        return "other"
+
+    @staticmethod
+    def _infer_subdomain(*, tags: list[str], title: str) -> str | None:
+        for tag in tags:
+            normalized = tag.strip()
+            if normalized:
+                return normalized
+        title_parts = [part.strip() for part in re.split(r"[-_/|:]+", title) if part.strip()]
+        if len(title_parts) > 1:
+            return title_parts[0][:64]
+        return None
+
+    @staticmethod
     def _build_structured_extract(
         *,
         title: str,
+        domain: str,
+        subdomain: str | None,
         author: str | None,
         note_url: str | None,
         tags: list[str],
@@ -216,6 +293,9 @@ class XiaohongshuKnowledgeAdapter(CLIKnowledgeAdapter):
             "",
         ]
         lines.append(f"- Title: {title}")
+        lines.append(f"- Domain: {domain}")
+        if subdomain:
+            lines.append(f"- Subdomain: {subdomain}")
         if author:
             lines.append(f"- Author: {author}")
         if note_url:

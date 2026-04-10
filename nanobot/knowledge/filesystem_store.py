@@ -8,12 +8,25 @@ from pathlib import Path
 import yaml
 
 from nanobot.knowledge.base import KnowledgeStore
-from nanobot.knowledge.contracts import KnowledgeArtifact, KnowledgeCandidate, KnowledgeQuery
+from nanobot.knowledge.contracts import KnowledgeArtifact, KnowledgeCandidate, KnowledgeDomain, KnowledgeQuery
 from nanobot.utils.helpers import ensure_dir, safe_filename
 
 
 class FilesystemKnowledgeStore(KnowledgeStore):
     """Persist knowledge artifacts as markdown files inside the workspace vault."""
+
+    _KNOWN_DOMAINS: tuple[str, ...] = (
+        "finance",
+        "paper",
+        "agent",
+        "rl",
+        "llm",
+        "infra",
+        "product",
+        "policy",
+        "biology",
+        "other",
+    )
 
     def __init__(self, root: Path):
         self.root = ensure_dir(root)
@@ -41,6 +54,9 @@ class FilesystemKnowledgeStore(KnowledgeStore):
                 "kind": artifact.kind,
                 "status": artifact.status,
                 "claim_type": artifact.claim_type,
+                "domain": artifact.domain,
+                "subdomain": artifact.subdomain,
+                "cross_domain": artifact.cross_domain,
                 "title": artifact.title,
                 "summary": artifact.summary,
                 "tags": artifact.tags,
@@ -48,6 +64,7 @@ class FilesystemKnowledgeStore(KnowledgeStore):
                 "citations": artifact.citations,
                 "derived_from": artifact.derived_from,
                 "related_notes": artifact.related_notes,
+                "bridges": artifact.bridges,
                 "confidence": artifact.confidence,
                 "metadata": artifact.metadata,
             }
@@ -74,6 +91,8 @@ class FilesystemKnowledgeStore(KnowledgeStore):
             if artifact.layer not in query.layers:
                 continue
             if query.kinds and artifact.kind not in query.kinds:
+                continue
+            if query.domains and artifact.domain not in query.domains:
                 continue
             haystack = f"{artifact.title}\n{artifact.summary or ''}\n{artifact.content}".lower()
             score = 0.0
@@ -102,6 +121,7 @@ class FilesystemKnowledgeStore(KnowledgeStore):
             return None
         inferred_layer = self._infer_layer(path, meta)
         inferred_kind = self._infer_kind(path, meta, inferred_layer)
+        inferred_domain = self._infer_domain(path, meta)
         title = meta.get("title") or self._infer_title(path, body)
         if not isinstance(title, str) or not title.strip():
             return None
@@ -117,6 +137,9 @@ class FilesystemKnowledgeStore(KnowledgeStore):
             kind=inferred_kind,
             status=str(meta.get("status") or "active"),
             claim_type=str(meta.get("claim_type") or ("synthesis" if inferred_layer == "synthesis" else "fact")),
+            domain=inferred_domain,
+            subdomain=meta.get("subdomain"),
+            cross_domain=bool(meta.get("cross_domain", False)),
             title=title.strip(),
             content=body.strip(),
             summary=meta.get("summary"),
@@ -125,6 +148,7 @@ class FilesystemKnowledgeStore(KnowledgeStore):
             citations=self._coerce_str_list(meta.get("citations")),
             derived_from=self._coerce_str_list(meta.get("derived_from")),
             related_notes=self._coerce_str_list(meta.get("related_notes")),
+            bridges=self._coerce_domain_list(meta.get("bridges")),
             confidence=meta.get("confidence"),
             metadata=dict(meta.get("metadata", {}) or {}),
         )
@@ -164,6 +188,17 @@ class FilesystemKnowledgeStore(KnowledgeStore):
             return "fusion"
         return "archive"
 
+    def _infer_domain(self, path: Path | None, meta: dict) -> KnowledgeDomain:
+        domain = meta.get("domain")
+        if isinstance(domain, str) and domain in self._KNOWN_DOMAINS:
+            return domain  # type: ignore[return-value]
+        if path is not None:
+            rel_parts = path.relative_to(self.root).parts
+            for part in rel_parts:
+                if part in self._KNOWN_DOMAINS:
+                    return part  # type: ignore[return-value]
+        return "other"
+
     @staticmethod
     def _infer_title(path: Path | None, body: str) -> str | None:
         for line in body.splitlines():
@@ -181,3 +216,10 @@ class FilesystemKnowledgeStore(KnowledgeStore):
         if isinstance(value, str) and value.strip():
             return [value.strip()]
         return []
+
+    def _coerce_domain_list(self, value: object) -> list[KnowledgeDomain]:
+        out: list[KnowledgeDomain] = []
+        for item in self._coerce_str_list(value):
+            if item in self._KNOWN_DOMAINS:
+                out.append(item)  # type: ignore[arg-type]
+        return out

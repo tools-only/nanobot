@@ -13,6 +13,7 @@ import yaml
 
 from nanobot.agent.tools.web import WebSearchTool
 from nanobot.config.schema import KnowledgeExpansionConfig, WebSearchConfig
+from nanobot.knowledge.contracts import KnowledgeDomain
 from nanobot.utils.helpers import ensure_dir, safe_filename
 
 
@@ -30,6 +31,10 @@ class KnowledgeExpansionJob:
     extracted_links: list[str] = field(default_factory=list)
     suggested_queries: list[str] = field(default_factory=list)
     tags: list[str] = field(default_factory=list)
+    domain: KnowledgeDomain = "other"
+    subdomain: str | None = None
+    cross_domain: bool = False
+    bridges: list[KnowledgeDomain] = field(default_factory=list)
     excerpt: str | None = None
     derived_from: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -69,6 +74,13 @@ class KnowledgeFusionManager:
             lines.append(f"- Source Query: {job.source_query}")
         if job.tags:
             lines.append(f"- Tags: {', '.join(job.tags)}")
+        lines.append(f"- Domain: {job.domain}")
+        if job.subdomain:
+            lines.append(f"- Subdomain: {job.subdomain}")
+        if job.cross_domain:
+            lines.append("- Cross Domain: true")
+        if job.bridges:
+            lines.append(f"- Bridges: {', '.join(job.bridges)}")
         if job.derived_from:
             lines.append(f"- Derived From: {', '.join(job.derived_from)}")
         lines.extend(["", "## Suggested Queries", ""])
@@ -137,6 +149,10 @@ class KnowledgeFusionManager:
         links = self._coerce_str_list(frontmatter.get("links"))
         extracted_links = sorted(set([*links, *self._URL_RE.findall(body)]))
         derived_from = self._coerce_str_list(frontmatter.get("derived_from"))
+        domain = self._coerce_domain(frontmatter.get("domain"))
+        bridges = self._coerce_domain_list(frontmatter.get("bridges"))
+        cross_domain = bool(frontmatter.get("cross_domain", False))
+        subdomain = frontmatter.get("subdomain") if isinstance(frontmatter.get("subdomain"), str) else None
         artifact_id = frontmatter.get("artifact_id")
         if isinstance(artifact_id, str) and artifact_id:
             derived_from.append(artifact_id)
@@ -154,6 +170,10 @@ class KnowledgeFusionManager:
             extracted_links=extracted_links,
             suggested_queries=[title, *tags[:3]],
             tags=tags,
+            domain=domain,
+            subdomain=subdomain,
+            cross_domain=cross_domain,
+            bridges=bridges,
             excerpt=body[:1000] if body else None,
             derived_from=sorted(set(derived_from)),
             metadata={"source_path": note_rel.as_posix()},
@@ -181,6 +201,31 @@ class KnowledgeFusionManager:
         if isinstance(value, str) and value.strip():
             return [value.strip()]
         return []
+
+    @staticmethod
+    def _coerce_domain(value: Any) -> KnowledgeDomain:
+        if isinstance(value, str) and value in {
+            "finance",
+            "paper",
+            "agent",
+            "rl",
+            "llm",
+            "infra",
+            "product",
+            "policy",
+            "biology",
+            "other",
+        }:
+            return value
+        return "other"
+
+    def _coerce_domain_list(self, value: Any) -> list[KnowledgeDomain]:
+        out: list[KnowledgeDomain] = []
+        for item in self._coerce_str_list(value):
+            domain = self._coerce_domain(item)
+            if domain not in out:
+                out.append(domain)
+        return out
 
 
 class KnowledgeExpansionWorker:
@@ -228,7 +273,11 @@ class KnowledgeExpansionWorker:
             "kind": "fusion",
             "status": "reviewed",
             "claim_type": "synthesis",
+            "domain": job.domain,
+            "subdomain": job.subdomain,
+            "cross_domain": job.cross_domain,
             "tags": job.tags,
+            "bridges": job.bridges,
             "source": job.source_kind,
             "derived_from": job.derived_from,
             "confidence": 0.6 if classified or queries else 0.4,
@@ -254,6 +303,13 @@ class KnowledgeExpansionWorker:
             lines.append(f"- Source Query: {job.source_query}")
         if job.tags:
             lines.append(f"- Tags: {', '.join(job.tags)}")
+        lines.append(f"- Domain: {job.domain}")
+        if job.subdomain:
+            lines.append(f"- Subdomain: {job.subdomain}")
+        if job.cross_domain:
+            lines.append("- Cross Domain: true")
+        if job.bridges:
+            lines.append(f"- Bridges: {', '.join(job.bridges)}")
         if job.derived_from:
             lines.append(f"- Derived From: {', '.join(job.derived_from)}")
 
@@ -340,9 +396,13 @@ class KnowledgeExpansionWorker:
     ) -> list[str]:
         lines = [
             f"- This expansion job was generated from a `{job.source_kind}` share in `{job.channel}`.",
+            f"- The source knowledge is classified under the `{job.domain}` domain.",
             f"- Extracted {sum(len(v) for v in classified.values())} outbound links across {len(classified)} categories.",
             f"- Prepared {len(queries)} follow-up research queries for later enrichment.",
         ]
+        if job.cross_domain or job.bridges:
+            bridges = ", ".join(job.bridges) if job.bridges else "additional domains"
+            lines.append(f"- This synthesis can bridge into {bridges}.")
         if "papers" in classified:
             lines.append("- Paper-like links were detected and should be prioritized for factual enrichment.")
         if "code" in classified:

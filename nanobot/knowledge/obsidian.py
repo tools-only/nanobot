@@ -10,6 +10,20 @@ from nanobot.knowledge.cli_runner import ExternalCLI
 from nanobot.utils.helpers import ensure_dir
 
 
+_KNOWN_DOMAINS = (
+    "finance",
+    "paper",
+    "agent",
+    "rl",
+    "llm",
+    "infra",
+    "product",
+    "policy",
+    "biology",
+    "other",
+)
+
+
 class ObsidianFrontend:
     """Bridge to Obsidian CLI for browsing and editing the knowledge vault."""
 
@@ -21,14 +35,13 @@ class ObsidianFrontend:
 
     def ensure_scaffold(self) -> None:
         ensure_dir(self.vault_path)
-        for folder in (
+        folders = {
             "raw",
             "raw/xiaohongshu",
             "parsed",
             "parsed/xiaohongshu",
             "canonical",
             "canonical/archive",
-            "canonical/archive/xiaohongshu",
             "canonical/concepts",
             "synthesis",
             "synthesis/topics",
@@ -37,19 +50,25 @@ class ObsidianFrontend:
             "collections/xiaohongshu",
             "research/xiaohongshu",
             "research/expansion_queue",
-        ):
+        }
+        for domain in _KNOWN_DOMAINS:
+            folders.add(f"raw/xiaohongshu/{domain}")
+            folders.add(f"parsed/xiaohongshu/{domain}")
+            folders.add(f"canonical/archive/{domain}/xiaohongshu")
+            folders.add(f"canonical/concepts/{domain}")
+        for folder in sorted(folders):
             ensure_dir(self.vault_path / folder)
 
         index = self.vault_path / "README.md"
         if not index.exists():
             index.write_text(
                 "# Knowledge Vault\n\n"
-                "- `raw/`: source captures\n"
-                "- `parsed/`: structured extracts without interpretation\n"
-                "- `canonical/archive/`: normalized archive notes\n"
-                "- `canonical/concepts/`: stable single-concept notes\n"
+                "- `raw/<source>/<domain>/`: source captures organized by source and domain\n"
+                "- `parsed/<source>/<domain>/`: structured extracts without interpretation\n"
+                "- `canonical/archive/<domain>/<source>/`: normalized archive notes\n"
+                "- `canonical/concepts/<domain>/`: stable single-concept notes\n"
                 "- `synthesis/topics/`: cross-source topic notes\n"
-                "- `synthesis/fusion/`: high-level linked synthesis notes\n"
+                "- `synthesis/fusion/`: high-level linked synthesis notes, often cross-domain\n"
                 "- `research/expansion_queue/`: explicit promotion queue\n",
                 encoding="utf-8",
             )

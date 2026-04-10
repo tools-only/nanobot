@@ -74,6 +74,8 @@ class InMemoryKnowledgeStore(KnowledgeStore):
                 continue
             if query.kinds and artifact.kind not in query.kinds:
                 continue
+            if query.domains and artifact.domain not in query.domains:
+                continue
             haystack = f"{artifact.title}\n{artifact.summary or ''}\n{artifact.content}".lower()
             score = 0.0
             if query_text and query_text in haystack:
@@ -112,12 +114,16 @@ class PassthroughKnowledgeCompiler(KnowledgeCompiler):
                 kind=artifact.kind,
                 status=artifact.status,
                 claim_type=artifact.claim_type,
+                domain=artifact.domain,
+                subdomain=artifact.subdomain,
+                cross_domain=artifact.cross_domain,
                 summary=artifact.summary,
                 tags=list(artifact.tags),
                 links=list(artifact.links),
                 citations=list(artifact.citations),
                 derived_from=list(artifact.derived_from),
                 related_notes=list(artifact.related_notes),
+                bridges=list(artifact.bridges),
                 confidence=artifact.confidence,
                 metadata=dict(artifact.metadata),
             ))

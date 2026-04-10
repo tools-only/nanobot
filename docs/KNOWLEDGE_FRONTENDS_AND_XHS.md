@@ -8,10 +8,10 @@ The knowledge vault is now scaffolded under the workspace knowledge root and can
 
 Current vault layout:
 
-- `raw/xiaohongshu/`
-- `parsed/xiaohongshu/`
-- `canonical/archive/xiaohongshu/`
-- `canonical/concepts/`
+- `raw/<source>/<domain>/`
+- `parsed/<source>/<domain>/`
+- `canonical/archive/<domain>/<source>/`
+- `canonical/concepts/<domain>/`
 - `synthesis/topics/`
 - `synthesis/fusion/`
 - `inbox/`
@@ -93,10 +93,11 @@ When a user message contains a Xiaohongshu URL:
    - `raw`
    - `parsed`
    - `canonical`
-5. by default, no high-level synthesis is created on ingest
-6. if explicit promotion is requested, an expansion job is queued
-7. promoted jobs materialize into `synthesis/fusion/`
-8. the turn log records the resulting knowledge activity
+5. low-level artifacts are classified into a domain such as `finance`, `paper`, or `llm`
+6. by default, no high-level synthesis is created on ingest
+7. if explicit promotion is requested, an expansion job is queued
+8. promoted jobs materialize into `synthesis/fusion/`
+9. the turn log records the resulting knowledge activity
 
 If `xhs` is unavailable, the URL is queued into:
 
@@ -127,7 +128,7 @@ The command also emits a compact research note under:
 - `nanobot knowledge xhs collect-url "<url>" --queue-expansion`
 - `nanobot knowledge xhs scan-topic "agentic rl" --sort latest --limit 3`
 - `nanobot knowledge xhs scan-topic "agentic rl" --sort latest --limit 3 --queue-expansion`
-- `nanobot knowledge expand enqueue-note canonical/archive/xiaohongshu/example.md`
+- `nanobot knowledge expand enqueue-note canonical/archive/paper/xiaohongshu/example.md`
 - `nanobot knowledge expand run`
 - `nanobot knowledge expand run --with-search`
 
@@ -139,11 +140,12 @@ Implemented:
 - active topic scan entry point
 - filesystem-backed vault persistence
 - layered artifact generation for Xiaohongshu ingests with low-level default archiving
+- domain-aware low-level routing for archive knowledge
 - explicit expansion-queue generation
 - explicit synthesis/fusion promotion
 - manual expansion worker with optional web search
 - Discord-first passive collection defaults
-- auto archive into `raw/`, `parsed/`, and `canonical/archive/` inside the vault
+- auto archive into `raw/<source>/<domain>/`, `parsed/<source>/<domain>/`, and `canonical/archive/<domain>/<source>/` inside the vault
 - expansion queue persistence and completion tracking
 
 Not implemented yet:
@@ -180,5 +182,5 @@ Behavior:
 The expansion worker currently:
 - classifies outbound links as papers / code / blogs / other
 - trims and normalizes suggested follow-up queries
-- builds a traceable fusion note with `derived_from`
+- builds a traceable fusion note with `derived_from`, `domain`, and optional cross-domain bridges
 - optionally runs lightweight web search over selected queries
