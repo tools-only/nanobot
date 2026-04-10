@@ -7,7 +7,7 @@ from typing import Any, Literal
 
 
 KnowledgeLayer = Literal["raw", "parsed", "canonical", "synthesis"]
-KnowledgePlatform = Literal["filesystem", "web", "mcp", "obsidian", "api", "custom"]
+KnowledgePlatform = Literal["filesystem", "web", "mcp", "obsidian", "api", "cli", "custom"]
 
 
 @dataclass

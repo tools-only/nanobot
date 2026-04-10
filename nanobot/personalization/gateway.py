@@ -6,7 +6,16 @@ from pathlib import Path
 from typing import Any
 
 from nanobot.agent.skills import SkillsLoader
-from nanobot.knowledge import KnowledgeRuntime
+from nanobot.config.loader import load_config
+from nanobot.config.paths import get_knowledge_path
+from nanobot.knowledge import (
+    FilesystemKnowledgeStore,
+    KnowledgeExpansionWorker,
+    KnowledgeRuntime,
+    ObsidianFrontend,
+    XiaohongshuKnowledgeAdapter,
+    XiaohongshuKnowledgeCollector,
+)
 from nanobot.memory_layers import LayeredMemoryManager, MemoryObservation
 from nanobot.personalization.assembler import ExposureAssembler
 from nanobot.personalization.candidate_generators import CandidateGenerators
@@ -29,8 +38,25 @@ class PersonalizationGateway:
 
     def __init__(self, workspace: Path):
         self.workspace = workspace
+        self.config = load_config()
+        self.knowledge_root = get_knowledge_path(workspace, self.config.knowledge.root)
         self.skills_loader = SkillsLoader(workspace)
-        self.knowledge = KnowledgeRuntime(workspace)
+        self.knowledge = KnowledgeRuntime(workspace, store=FilesystemKnowledgeStore(self.knowledge_root))
+        self.knowledge.register_adapter(XiaohongshuKnowledgeAdapter())
+        self.obsidian = ObsidianFrontend(self.workspace, self.config.knowledge.obsidian, knowledge_root=self.knowledge_root)
+        if self.config.knowledge.obsidian.auto_scaffold:
+            self.obsidian.ensure_scaffold()
+        self.xiaohongshu = XiaohongshuKnowledgeCollector(
+            self.knowledge,
+            self.knowledge_root,
+            self.config.knowledge.xiaohongshu,
+        )
+        self.expansion = KnowledgeExpansionWorker(
+            self.knowledge_root,
+            config=self.config.knowledge.expansion,
+            web_search_config=self.config.tools.web.search,
+            proxy=self.config.tools.web.proxy,
+        )
         self.memory_layers = LayeredMemoryManager()
         self.providers = ContextVariableRegistry()
         self.profile_store = ProfileStore(workspace)
@@ -103,6 +129,14 @@ class PersonalizationGateway:
             metadata={"channel": msg.channel, "chat_id": msg.chat_id},
         ))
         memory_promotions = self.memory_layers.evaluate_promotions(memory_units)
+        knowledge_activity = self.xiaohongshu.collect_from_message(
+            text=msg.content,
+            user_key=plan.state.user_key,
+            channel=msg.channel,
+        )
+        expansion_outputs: list[str] = []
+        if knowledge_activity is not None and self.config.knowledge.expansion.enabled and self.config.knowledge.expansion.auto_run_on_ingest:
+            expansion_outputs = [str(path) for path in self.expansion.run_pending(limit=5, with_search=False)]
         self.store.append_turn({
             "event": "turn_completed",
             "user_key": plan.state.user_key,
@@ -115,6 +149,16 @@ class PersonalizationGateway:
             "layered_memory": {
                 "units": [unit.to_dict() for unit in memory_units],
                 "promotion_decisions": [decision.to_dict() for decision in memory_promotions],
+            },
+            "knowledge_activity": {
+                "obsidian": self.obsidian.status(include_version=False),
+                "xiaohongshu": None if knowledge_activity is None else {
+                    "mode": knowledge_activity.mode,
+                    "query": knowledge_activity.query,
+                    "artifacts": knowledge_activity.artifacts,
+                    "warnings": knowledge_activity.warnings,
+                },
+                "expansion_outputs": expansion_outputs,
             },
             "final_content": final_content,
             "message_count": len(new_messages),

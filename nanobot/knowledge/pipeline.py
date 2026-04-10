@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 
 from nanobot.knowledge.base import (
-    BaseKnowledgeSourceAdapter,
     KnowledgeCompiler,
     KnowledgeRetentionPolicy,
     KnowledgeSourceAdapter,
@@ -167,11 +166,14 @@ class KnowledgeRuntime:
             result.warnings.append(f"retention_rejected:{decision.reason}")
             return result
 
-        artifacts = self.compiler.compile(
-            result.artifacts,
-            target_layer=decision.target_layer,
-            source=request.source,
-        )
+        if result.metadata.get("preserve_layers"):
+            artifacts = result.artifacts
+        else:
+            artifacts = self.compiler.compile(
+                result.artifacts,
+                target_layer=decision.target_layer,
+                source=request.source,
+            )
         self.store.write_artifacts(artifacts)
         return KnowledgeIngestResult(
             source=result.source,

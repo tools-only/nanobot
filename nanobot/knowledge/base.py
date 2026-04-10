@@ -120,6 +120,12 @@ class APIKnowledgeAdapter(BaseKnowledgeSourceAdapter):
     supported_platforms = ("api",)
 
 
+class CLIKnowledgeAdapter(BaseKnowledgeSourceAdapter):
+    """Base class for external CLI-backed knowledge sources."""
+
+    supported_platforms = ("cli",)
+
+
 class KnowledgeStore(ABC):
     """Storage backend for layered knowledge artifacts."""
 

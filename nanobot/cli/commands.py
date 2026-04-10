@@ -2,6 +2,7 @@
 
 import asyncio
 from contextlib import contextmanager, nullcontext
+import json
 
 import os
 import select
@@ -1060,6 +1061,18 @@ def channels_login(
 plugins_app = typer.Typer(help="Manage channel plugins")
 app.add_typer(plugins_app, name="plugins")
 
+knowledge_app = typer.Typer(help="Manage the knowledge base")
+app.add_typer(knowledge_app, name="knowledge")
+
+knowledge_obsidian_app = typer.Typer(help="Obsidian CLI knowledge frontend")
+knowledge_app.add_typer(knowledge_obsidian_app, name="obsidian")
+
+knowledge_xhs_app = typer.Typer(help="Xiaohongshu knowledge collection")
+knowledge_app.add_typer(knowledge_xhs_app, name="xhs")
+
+knowledge_expand_app = typer.Typer(help="Background fusion and expansion")
+knowledge_app.add_typer(knowledge_expand_app, name="expand")
+
 
 @plugins_app.command("list")
 def plugins_list():
@@ -1093,6 +1106,148 @@ def plugins_list():
         )
 
     console.print(table)
+
+
+def _build_knowledge_stack():
+    from nanobot.config.loader import load_config
+    from nanobot.config.paths import get_knowledge_path
+    from nanobot.knowledge import (
+        FilesystemKnowledgeStore,
+        KnowledgeExpansionWorker,
+        KnowledgeRuntime,
+        ObsidianFrontend,
+        XiaohongshuKnowledgeAdapter,
+        XiaohongshuKnowledgeCollector,
+    )
+
+    config = load_config()
+    workspace = config.workspace_path
+    knowledge_root = get_knowledge_path(workspace, config.knowledge.root)
+    runtime = KnowledgeRuntime(workspace, store=FilesystemKnowledgeStore(knowledge_root))
+    runtime.register_adapter(XiaohongshuKnowledgeAdapter())
+    obsidian = ObsidianFrontend(workspace, config.knowledge.obsidian, knowledge_root=knowledge_root)
+    collector = XiaohongshuKnowledgeCollector(runtime, knowledge_root, config.knowledge.xiaohongshu)
+    expansion = KnowledgeExpansionWorker(
+        knowledge_root,
+        config=config.knowledge.expansion,
+        web_search_config=config.tools.web.search,
+        proxy=config.tools.web.proxy,
+    )
+    return config, knowledge_root, runtime, obsidian, collector, expansion
+
+
+@knowledge_app.command("status")
+def knowledge_status():
+    """Show knowledge-base integration status."""
+    config, knowledge_root, _, obsidian, collector, expansion = _build_knowledge_stack()
+    console.print(f"{__logo__} Knowledge Status\n")
+    console.print(f"Knowledge root: {knowledge_root}")
+    console.print(f"Knowledge enabled: {'yes' if config.knowledge.enabled else 'no'}")
+    console.print("\n[bold]Obsidian[/bold]")
+    console.print_json(json.dumps(obsidian.status(), ensure_ascii=False))
+    console.print("\n[bold]Xiaohongshu[/bold]")
+    console.print_json(json.dumps(collector.cli.status(), ensure_ascii=False))
+    console.print("\n[bold]Expansion[/bold]")
+    console.print_json(json.dumps({
+        "enabled": expansion.config.enabled,
+        "auto_run_on_ingest": expansion.config.auto_run_on_ingest,
+        "allow_web_search": expansion.config.allow_web_search,
+        "queue_dir": str(expansion.state_dir),
+    }, ensure_ascii=False))
+
+
+@knowledge_obsidian_app.command("scaffold")
+def knowledge_obsidian_scaffold():
+    """Create the initial knowledge vault scaffold for Obsidian."""
+    _, knowledge_root, _, obsidian, _, _ = _build_knowledge_stack()
+    obsidian.ensure_scaffold()
+    console.print(f"[green]✓[/green] Knowledge vault scaffold ready at {knowledge_root}")
+
+
+@knowledge_obsidian_app.command("search")
+def knowledge_obsidian_search(
+    query: str = typer.Argument(..., help="Search query"),
+    limit: int = typer.Option(20, "--limit", "-n", help="Max files to return"),
+):
+    """Search the knowledge vault via Obsidian CLI."""
+    _, _, _, obsidian, _, _ = _build_knowledge_stack()
+    if not obsidian.cli.available():
+        console.print("[red]Obsidian CLI not available.[/red]")
+        raise typer.Exit(1)
+    console.print_json(json.dumps(obsidian.search(query, limit=limit), ensure_ascii=False))
+
+
+@knowledge_obsidian_app.command("open")
+def knowledge_obsidian_open(
+    path: str = typer.Argument(..., help="Vault-relative note path"),
+):
+    """Open a knowledge note in Obsidian."""
+    _, _, _, obsidian, _, _ = _build_knowledge_stack()
+    if not obsidian.cli.available():
+        console.print("[red]Obsidian CLI not available.[/red]")
+        raise typer.Exit(1)
+    obsidian.open(path)
+    console.print(f"[green]✓[/green] Opened {path}")
+
+
+@knowledge_xhs_app.command("status")
+def knowledge_xhs_status():
+    """Show xiaohongshu-cli status."""
+    _, _, _, _, collector, _ = _build_knowledge_stack()
+    console.print_json(json.dumps(collector.cli.status(), ensure_ascii=False))
+
+
+@knowledge_xhs_app.command("collect-url")
+def knowledge_xhs_collect_url(
+    url: str = typer.Argument(..., help="Xiaohongshu note URL"),
+):
+    """Collect one Xiaohongshu note into the knowledge base."""
+    _, _, _, _, collector, _ = _build_knowledge_stack()
+    result = collector.collect_from_message(text=url, user_key="cli:manual", channel="cli")
+    if result is None:
+        console.print("[yellow]No Xiaohongshu URL detected or collection disabled.[/yellow]")
+        raise typer.Exit(1)
+    console.print_json(json.dumps({
+        "mode": result.mode,
+        "query": result.query,
+        "artifact_count": len(result.artifacts),
+        "warnings": result.warnings,
+    }, ensure_ascii=False))
+
+
+@knowledge_xhs_app.command("scan-topic")
+def knowledge_xhs_scan_topic(
+    topic: str = typer.Argument(..., help="Topic to scan"),
+    sort: str = typer.Option("latest", "--sort", help="XHS sort mode"),
+    limit: int = typer.Option(3, "--limit", "-n", help="Max notes to ingest"),
+):
+    """Run an active Xiaohongshu topic scan into the knowledge base."""
+    from nanobot.knowledge import build_topic_scan_note
+
+    _, knowledge_root, _, _, collector, _ = _build_knowledge_stack()
+    result = collector.collect_topic(topic=topic, sort=sort, limit=limit)
+    note = build_topic_scan_note(knowledge_root, topic=topic, result=result)
+    console.print_json(json.dumps({
+        "mode": result.mode,
+        "topic": result.query,
+        "artifact_count": len(result.artifacts),
+        "warnings": result.warnings,
+        "note": str(note),
+    }, ensure_ascii=False))
+
+
+@knowledge_expand_app.command("run")
+def knowledge_expand_run(
+    limit: int = typer.Option(10, "--limit", "-n", help="Max queued jobs to process"),
+    with_search: bool = typer.Option(False, "--with-search", help="Run web search during expansion"),
+):
+    """Process queued fusion/expansion jobs into knowledge notes."""
+    _, _, _, _, _, expansion = _build_knowledge_stack()
+    outputs = expansion.run_pending(limit=limit, with_search=with_search)
+    console.print_json(json.dumps({
+        "processed": len(outputs),
+        "notes": [str(path) for path in outputs],
+    }, ensure_ascii=False))
 
 
 # ============================================================================

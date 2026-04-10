@@ -154,6 +154,47 @@ class ToolsConfig(Base):
     mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
 
 
+class ObsidianCLIConfig(Base):
+    """Obsidian CLI frontend configuration for the knowledge base."""
+
+    enabled: bool = False
+    command: str = "obsidian"
+    vault_path: str | None = None
+    auto_scaffold: bool = True
+
+
+class XiaohongshuCLIConfig(Base):
+    """Xiaohongshu CLI collection configuration."""
+
+    enabled: bool = False
+    command: str = "xhs"
+    auto_collect_shared_links: bool = True
+    collect_comments: bool = True
+    collect_comments_all: bool = False
+    active_default_limit: int = Field(default=3, ge=1, le=20)
+    passive_allowed_channels: list[str] = Field(default_factory=lambda: ["discord"])
+
+
+class KnowledgeExpansionConfig(Base):
+    """Background knowledge fusion and expansion settings."""
+
+    enabled: bool = True
+    auto_run_on_ingest: bool = True
+    max_queries_per_job: int = Field(default=3, ge=1, le=10)
+    max_links_per_job: int = Field(default=8, ge=0, le=50)
+    allow_web_search: bool = False
+
+
+class KnowledgeConfig(Base):
+    """Knowledge-base and collection configuration."""
+
+    enabled: bool = True
+    root: str | None = None
+    obsidian: ObsidianCLIConfig = Field(default_factory=ObsidianCLIConfig)
+    xiaohongshu: XiaohongshuCLIConfig = Field(default_factory=XiaohongshuCLIConfig)
+    expansion: KnowledgeExpansionConfig = Field(default_factory=KnowledgeExpansionConfig)
+
+
 class Config(BaseSettings):
     """Root configuration for nanobot."""
 
@@ -162,6 +203,7 @@ class Config(BaseSettings):
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
+    knowledge: KnowledgeConfig = Field(default_factory=KnowledgeConfig)
 
     @property
     def workspace_path(self) -> Path:

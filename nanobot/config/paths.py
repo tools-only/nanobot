@@ -40,6 +40,14 @@ def get_workspace_path(workspace: str | None = None) -> Path:
     return ensure_dir(path)
 
 
+def get_knowledge_path(workspace: str | Path | None = None, root: str | None = None) -> Path:
+    """Resolve the knowledge workspace path."""
+    if root:
+        return ensure_dir(Path(root).expanduser())
+    base = Path(workspace).expanduser() if workspace is not None else Path.home() / ".nanobot" / "workspace"
+    return ensure_dir(base / "knowledge")
+
+
 def is_default_workspace(workspace: str | Path | None) -> bool:
     """Return whether a workspace resolves to nanobot's default workspace path."""
     current = Path(workspace).expanduser() if workspace is not None else Path.home() / ".nanobot" / "workspace"
