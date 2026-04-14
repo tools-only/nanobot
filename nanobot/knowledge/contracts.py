@@ -6,8 +6,8 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
 
-KnowledgeLayer = Literal["raw", "parsed", "canonical", "synthesis"]
-KnowledgeKind = Literal["archive", "concept", "topic", "fusion"]
+KnowledgeLayer = Literal["raw", "parsed", "canonical", "synthesis", "gist"]
+KnowledgeKind = Literal["archive", "concept", "topic", "fusion", "gist"]
 KnowledgeStatus = Literal["active", "queued", "reviewed", "deprecated"]
 KnowledgeClaimType = Literal["fact", "synthesis", "hypothesis"]
 KnowledgeDomain = Literal["finance", "paper", "agent", "rl", "llm", "infra", "product", "policy", "biology", "other"]
@@ -100,7 +100,7 @@ class KnowledgeQuery:
     query: str
     user_key: str | None = None
     namespace: str = "shared"
-    layers: list[KnowledgeLayer] = field(default_factory=lambda: ["canonical", "synthesis"])
+    layers: list[KnowledgeLayer] = field(default_factory=lambda: ["gist", "canonical", "synthesis"])
     kinds: list[KnowledgeKind] = field(default_factory=list)
     domains: list[KnowledgeDomain] = field(default_factory=list)
     tags: list[str] = field(default_factory=list)

@@ -12,17 +12,27 @@ Current vault layout:
 - `parsed/<source>/<domain>/`
 - `canonical/archive/<domain>/<source>/`
 - `canonical/concepts/<domain>/`
+- `gist/`
 - `synthesis/topics/`
 - `synthesis/fusion/`
 - `inbox/`
 - `collections/xiaohongshu/`
 - `research/xiaohongshu/`
 - `research/expansion_queue/`
+- `AGENTS.md`
+- `index.md`
+- `log.md`
 
 Obsidian integration is intentionally lightweight:
 - we do not require Obsidian for backend storage
 - we use Obsidian CLI only as an optional frontend and operator surface
 - the same vault can still be read and written directly by filesystem-backed knowledge code
+
+The scaffold now also initializes a minimal maintenance surface:
+- `AGENTS.md` for knowledge-organization and update rules
+- `index.md` as the canonical navigation entrypoint
+- `log.md` as an append-only maintenance record
+- `gist/` as a reserved high-density retrieval layer above the wiki surface
 
 Config keys:
 
@@ -72,6 +82,7 @@ Config keys:
     },
     "expansion": {
       "enabled": true,
+      "autoMaintainOnShare": true,
       "autoQueueOnIngest": false,
       "autoRunOnIngest": false,
       "maxQueriesPerJob": 3,
@@ -94,8 +105,12 @@ When a user message contains a Xiaohongshu URL:
    - `parsed`
    - `canonical`
 5. low-level artifacts are classified into a domain such as `finance`, `paper`, or `llm`
-6. by default, no high-level synthesis is created on ingest
-7. if explicit promotion is requested, an expansion job is queued
+6. if `autoMaintainOnShare` is enabled, the share is treated as a knowledge-maintenance event:
+   - an expansion job is queued automatically
+   - the worker writes `synthesis/fusion/`
+   - the worker refreshes `gist/`
+   - the worker updates `index.md` and `log.md`
+7. if explicit promotion is requested, an expansion job is queued even when automatic maintenance is disabled
 8. promoted jobs materialize into `synthesis/fusion/`
 9. the turn log records the resulting knowledge activity
 
@@ -141,9 +156,10 @@ Implemented:
 - filesystem-backed vault persistence
 - layered artifact generation for Xiaohongshu ingests with low-level default archiving
 - domain-aware low-level routing for archive knowledge
+- automatic share-time maintenance path
 - explicit expansion-queue generation
 - explicit synthesis/fusion promotion
-- manual expansion worker with optional web search
+- expansion worker with optional web search, gist refresh, and index/log maintenance
 - Discord-first passive collection defaults
 - auto archive into `raw/<source>/<domain>/`, `parsed/<source>/<domain>/`, and `canonical/archive/<domain>/<source>/` inside the vault
 - expansion queue persistence and completion tracking
@@ -171,7 +187,8 @@ Behavior:
 
 - On Discord passive share ingest:
   - archive raw/parsed/canonical notes
-  - do not synthesize by default
+  - if `autoMaintainOnShare` is enabled, run the maintenance path automatically
+  - otherwise, keep the older archive-only behavior unless explicit promotion is requested
 - For explicit promotion:
   - run `nanobot knowledge xhs collect-url "<url>" --queue-expansion`
   - or run `nanobot knowledge expand enqueue-note <vault-relative-path>`

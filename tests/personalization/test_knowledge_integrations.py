@@ -22,8 +22,12 @@ def test_obsidian_frontend_scaffold_creates_vault_layout(tmp_path) -> None:
     frontend.ensure_scaffold()
 
     assert (frontend.vault_path / "README.md").exists()
+    assert (frontend.vault_path / "AGENTS.md").exists()
+    assert (frontend.vault_path / "index.md").exists()
+    assert (frontend.vault_path / "log.md").exists()
     assert (frontend.vault_path / "canonical" / "archive" / "paper" / "xiaohongshu").exists()
     assert (frontend.vault_path / "canonical" / "concepts" / "paper").exists()
+    assert (frontend.vault_path / "gist").exists()
     assert (frontend.vault_path / "synthesis" / "fusion").exists()
     assert (frontend.vault_path / "collections" / "xiaohongshu").exists()
 
@@ -100,6 +104,20 @@ def test_fusion_manager_writes_queue_and_note(tmp_path) -> None:
 def test_expansion_worker_processes_pending_jobs(tmp_path) -> None:
     root = tmp_path / "knowledge"
     fusion = KnowledgeFusionManager(root)
+    canonical_dir = root / "canonical" / "concepts" / "agent"
+    canonical_dir.mkdir(parents=True, exist_ok=True)
+    (canonical_dir / "memory.md").write_text(
+        "---\n"
+        "title: Agent Memory\n"
+        "layer: canonical\n"
+        "kind: concept\n"
+        "domain: agent\n"
+        "tags: [agent, memory]\n"
+        "---\n\n"
+        "# Agent Memory\n\n"
+        "Agent memory design patterns.\n",
+        encoding="utf-8",
+    )
     fusion.enqueue(KnowledgeExpansionJob(
         job_id="xhs-demo",
         source_kind="xiaohongshu",
@@ -122,6 +140,14 @@ def test_expansion_worker_processes_pending_jobs(tmp_path) -> None:
     assert len(outputs) == 1
     assert outputs[0].exists()
     assert "synthesis/fusion" in str(outputs[0])
+    assert any((root / "gist").glob("*.md"))
+    assert (root / "index.md").exists()
+    assert (root / "log.md").exists()
+    log_text = (root / "log.md").read_text(encoding="utf-8")
+    assert "### Trigger" in log_text
+    assert "### Decision" in log_text
+    assert "### Writes" in log_text
+    assert "### Review Checklist" in log_text
     assert (root / "inbox" / "expansion_done.jsonl").exists()
 
 
@@ -163,6 +189,39 @@ def test_xiaohongshu_ingest_defaults_to_low_level_archive(tmp_path) -> None:
     assert any((root / "parsed" / "xiaohongshu" / "paper").glob("*.md"))
     assert any((root / "canonical" / "archive" / "paper" / "xiaohongshu").glob("*.md"))
     assert not any((root / "synthesis").rglob("*.md"))
+
+
+def test_xiaohongshu_auto_run_implies_queue(tmp_path) -> None:
+    root = tmp_path / "knowledge"
+    runtime = KnowledgeRuntime(store=FilesystemKnowledgeStore(root))
+    runtime.register_adapter(XiaohongshuKnowledgeAdapter())
+    collector = XiaohongshuKnowledgeCollector(
+        runtime,
+        root,
+        XiaohongshuCLIConfig(enabled=True, command="xhs"),
+        KnowledgeExpansionConfig(enabled=True, auto_queue_on_ingest=False, auto_run_on_ingest=True),
+    )
+
+    collector.cli.available = lambda: True
+    collector.cli.read = lambda target: {
+        "data": {
+            "title": "Agent Memory Note",
+            "desc": "See https://arxiv.org/abs/1234.5678 for details",
+            "tags": ["agent", "memory"],
+            "nickname": "Author A",
+        }
+    }
+    collector.cli.comments = lambda target: {"data": []}
+
+    result = collector.collect_from_message(
+        text="https://www.xiaohongshu.com/explore/abc123",
+        user_key="cli:user",
+        channel="discord",
+    )
+
+    assert result is not None
+    assert any(item.get("job_id") for item in result.artifacts if isinstance(item, dict))
+    assert (root / "inbox" / "expansion_jobs.jsonl").exists()
 
 
 def test_filesystem_store_reads_yaml_archive_notes_across_custom_dirs(tmp_path) -> None:

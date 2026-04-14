@@ -509,7 +509,9 @@ class XiaohongshuKnowledgeCollector:
             metadata={"provider": "xiaohongshu", "mode": mode, "url": url, "query": query, "comments": comments_text},
         )
         result = self.runtime.ingest(request)
-        should_queue = self.expansion_config.auto_queue_on_ingest if queue_expansion is None else queue_expansion
+        should_queue = (
+            self.expansion_config.auto_queue_on_ingest or self.expansion_config.auto_run_on_ingest
+        ) if queue_expansion is None else queue_expansion
         expansion_jobs: list[dict[str, Any]] = []
         if should_queue:
             expansion_job = self.fusion.enqueue(self._build_expansion_job(

@@ -43,6 +43,7 @@ class ObsidianFrontend:
             "canonical",
             "canonical/archive",
             "canonical/concepts",
+            "gist",
             "synthesis",
             "synthesis/topics",
             "synthesis/fusion",
@@ -59,17 +60,62 @@ class ObsidianFrontend:
         for folder in sorted(folders):
             ensure_dir(self.vault_path / folder)
 
-        index = self.vault_path / "README.md"
-        if not index.exists():
-            index.write_text(
+        readme = self.vault_path / "README.md"
+        if not readme.exists():
+            readme.write_text(
                 "# Knowledge Vault\n\n"
                 "- `raw/<source>/<domain>/`: source captures organized by source and domain\n"
                 "- `parsed/<source>/<domain>/`: structured extracts without interpretation\n"
                 "- `canonical/archive/<domain>/<source>/`: normalized archive notes\n"
                 "- `canonical/concepts/<domain>/`: stable single-concept notes\n"
+                "- `gist/`: high-density cluster summaries for agent-default retrieval\n"
                 "- `synthesis/topics/`: cross-source topic notes\n"
                 "- `synthesis/fusion/`: high-level linked synthesis notes, often cross-domain\n"
                 "- `research/expansion_queue/`: explicit promotion queue\n",
+                encoding="utf-8",
+            )
+
+        schema = self.vault_path / "AGENTS.md"
+        if not schema.exists():
+            schema.write_text(
+                "# Knowledge Schema\n\n"
+                "Use this vault as a maintained knowledge base, not just a source archive.\n\n"
+                "## Layer Semantics\n\n"
+                "- `raw/`: immutable source captures\n"
+                "- `parsed/`: normalized extracts for tooling and transforms\n"
+                "- `canonical/` + `synthesis/`: main wiki surface\n"
+                "- `gist/`: high-density summaries for agent-default retrieval\n\n"
+                "## Update Policy\n\n"
+                "1. Update wiki pages when new sources change understanding.\n"
+                "2. Refresh gists only when cluster-level framing materially changes.\n"
+                "3. Update `index.md` when durable navigation changes.\n"
+                "4. Append reviewable maintenance entries to `log.md`.\n"
+                "5. Keep provenance through links, `derived_from`, and related-note metadata.\n\n"
+                "## Query Policy\n\n"
+                "1. Read `gist/` first.\n"
+                "2. Drill into `canonical/` and `synthesis/`.\n"
+                "3. Open `raw/` only for exact grounding.\n",
+                encoding="utf-8",
+            )
+
+        index = self.vault_path / "index.md"
+        if not index.exists():
+            index.write_text(
+                "# Knowledge Index\n\n"
+                "Canonical navigation file for the vault.\n\n"
+                "## Retrieval Order\n\n"
+                "1. Read `gist/` first for compressed context.\n"
+                "2. Read `canonical/` and `synthesis/` for the main wiki surface.\n"
+                "3. Read `raw/` for exact source grounding.\n",
+                encoding="utf-8",
+            )
+
+        log = self.vault_path / "log.md"
+        if not log.exists():
+            log.write_text(
+                "# Knowledge Log\n\n"
+                "Append-only record of ingests, promotions, restructures, and lint passes.\n\n"
+                "Entries should be human-reviewable and include trigger, decision, writes, related notes, and review checklist sections.\n",
                 encoding="utf-8",
             )
 

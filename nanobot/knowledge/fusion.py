@@ -14,7 +14,7 @@ import yaml
 from nanobot.agent.tools.web import WebSearchTool
 from nanobot.config.schema import KnowledgeExpansionConfig, WebSearchConfig
 from nanobot.knowledge.contracts import KnowledgeDomain
-from nanobot.utils.helpers import ensure_dir, safe_filename
+from nanobot.utils.helpers import ensure_dir, safe_filename, timestamp
 
 
 @dataclass
@@ -247,7 +247,10 @@ class KnowledgeExpansionWorker:
         self.config = config
         self.manager = KnowledgeFusionManager(root)
         self.output_dir = ensure_dir(self.root / "synthesis" / "fusion")
+        self.gist_dir = ensure_dir(self.root / "gist")
         self.state_dir = ensure_dir(self.root / "inbox")
+        self.index_path = self.root / "index.md"
+        self.log_path = self.root / "log.md"
         self.web_search = WebSearchTool(web_search_config, proxy=proxy) if config.allow_web_search else None
 
     def run_pending(self, limit: int | None = None, *, with_search: bool | None = None) -> list[Path]:
@@ -267,6 +270,9 @@ class KnowledgeExpansionWorker:
 
         note_name = safe_filename(f"{job.job_id}-{job.title}")[:120].strip("_") or job.job_id
         note_path = self.output_dir / f"{note_name}.md"
+        note_rel = note_path.relative_to(self.root).as_posix()
+        source_paths = self._resolve_source_paths(job)
+        related_paths = self._discover_related_notes(job, excluded={note_rel, *source_paths})
         frontmatter = {
             "title": job.title,
             "layer": "synthesis",
@@ -280,6 +286,7 @@ class KnowledgeExpansionWorker:
             "bridges": job.bridges,
             "source": job.source_kind,
             "derived_from": job.derived_from,
+            "related_notes": related_paths,
             "confidence": 0.6 if classified or queries else 0.4,
             "metadata": {
                 "job_id": job.job_id,
@@ -316,6 +323,13 @@ class KnowledgeExpansionWorker:
         lines.extend(["", "## Fusion Summary", ""])
         lines.extend(self._summary_lines(job=job, classified=classified, queries=queries))
 
+        lines.extend(["", "## Related Existing Notes", ""])
+        if related_paths:
+            for rel in related_paths:
+                lines.append(f"- {rel}")
+        else:
+            lines.append("- None found")
+
         lines.extend(["", "## Related Links", ""])
         if classified:
             for kind, urls in classified.items():
@@ -348,6 +362,27 @@ class KnowledgeExpansionWorker:
             + "\n".join(lines).strip()
             + "\n",
             encoding="utf-8",
+        )
+        gist_path = self._write_gist(
+            job=job,
+            source_paths=source_paths,
+            related_paths=related_paths,
+            fusion_rel=note_rel,
+            classified=classified,
+            queries=queries,
+            search_results=search_results,
+        )
+        self._ensure_maintenance_files()
+        self._update_index(
+            gist_rel=gist_path.relative_to(self.root).as_posix(),
+            fusion_rel=note_rel,
+        )
+        self._append_log(
+            job=job,
+            fusion_rel=note_rel,
+            gist_rel=gist_path.relative_to(self.root).as_posix(),
+            source_paths=source_paths,
+            related_paths=related_paths,
         )
         self._mark_done(job, note_path)
         return note_path
@@ -421,3 +456,280 @@ class KnowledgeExpansionWorker:
             except Exception as exc:
                 results[query] = f"search_failed: {exc}"
         return results
+
+    def _resolve_source_paths(self, job: KnowledgeExpansionJob) -> list[str]:
+        matches: list[str] = []
+        for path in self.root.rglob("*.md"):
+            rel = path.relative_to(self.root).as_posix()
+            if rel.startswith(".git/"):
+                continue
+            meta, _ = self._split_frontmatter(path.read_text(encoding="utf-8"))
+            artifact_id = meta.get("artifact_id")
+            url = meta.get("url")
+            source_url = ""
+            metadata = meta.get("metadata", {})
+            if isinstance(metadata, dict):
+                raw_source_url = metadata.get("source_url")
+                if isinstance(raw_source_url, str):
+                    source_url = raw_source_url
+            if isinstance(artifact_id, str) and artifact_id in job.derived_from:
+                matches.append(rel)
+                continue
+            if job.source_url and ((isinstance(url, str) and url == job.source_url) or source_url == job.source_url):
+                matches.append(rel)
+        return sorted(set(matches))
+
+    def _discover_related_notes(self, job: KnowledgeExpansionJob, *, excluded: set[str]) -> list[str]:
+        scored: list[tuple[float, str]] = []
+        title_tokens = self._tokenize(job.title)
+        query_tokens = self._tokenize(" ".join(job.suggested_queries))
+        tag_set = {tag.strip().lower() for tag in job.tags if tag.strip()}
+        for base in ("canonical", "synthesis"):
+            folder = self.root / base
+            if not folder.exists():
+                continue
+            for path in folder.rglob("*.md"):
+                rel = path.relative_to(self.root).as_posix()
+                if rel in excluded:
+                    continue
+                meta, body = self._split_frontmatter(path.read_text(encoding="utf-8"))
+                haystack = f"{meta.get('title', '')}\n{' '.join(self._coerce_str_list(meta.get('tags')))}\n{body}".lower()
+                score = 0.0
+                if isinstance(meta.get("domain"), str) and meta.get("domain") == job.domain:
+                    score += 1.5
+                if job.subdomain and isinstance(meta.get("subdomain"), str) and meta.get("subdomain") == job.subdomain:
+                    score += 1.5
+                note_tags = {tag.strip().lower() for tag in self._coerce_str_list(meta.get("tags")) if tag.strip()}
+                score += min(2.0, 0.5 * len(tag_set & note_tags))
+                score += min(2.0, 0.25 * len([token for token in title_tokens if token in haystack]))
+                score += min(1.5, 0.15 * len([token for token in query_tokens if token in haystack]))
+                if score <= 0:
+                    continue
+                scored.append((score, rel))
+        scored.sort(key=lambda item: (-item[0], item[1]))
+        out: list[str] = []
+        seen: set[str] = set()
+        for _, rel in scored:
+            if rel in seen:
+                continue
+            seen.add(rel)
+            out.append(rel)
+            if len(out) >= 5:
+                break
+        return out
+
+    def _write_gist(
+        self,
+        *,
+        job: KnowledgeExpansionJob,
+        source_paths: list[str],
+        related_paths: list[str],
+        fusion_rel: str,
+        classified: dict[str, list[str]],
+        queries: list[str],
+        search_results: dict[str, str],
+    ) -> Path:
+        cluster_name = job.subdomain or job.title
+        gist_name = safe_filename(f"{job.domain}-{cluster_name}")[:120].strip("_") or safe_filename(job.title) or "knowledge-gist"
+        gist_path = self.gist_dir / f"{gist_name}.md"
+        covered_notes = sorted(set([*source_paths, *related_paths, fusion_rel]))
+        frontmatter = {
+            "title": f"{job.title} Gist",
+            "layer": "gist",
+            "kind": "gist",
+            "status": "reviewed",
+            "claim_type": "synthesis",
+            "domain": job.domain,
+            "subdomain": job.subdomain,
+            "cluster": cluster_name,
+            "tags": job.tags,
+            "derived_from": job.derived_from,
+            "related_notes": related_paths,
+            "covered_notes": covered_notes,
+            "updated": timestamp(),
+            "metadata": {
+                "job_id": job.job_id,
+                "source_kind": job.source_kind,
+                "source_url": job.source_url,
+            },
+        }
+        lines = [
+            f"# {job.title} Gist",
+            "",
+            "## Scope",
+            "",
+            f"- Cluster: {cluster_name}",
+            f"- Domain: {job.domain}",
+        ]
+        if job.subdomain:
+            lines.append(f"- Subdomain: {job.subdomain}")
+        lines.extend([
+            "",
+            "## Cluster Thesis",
+            "",
+            f"- This gist compresses the knowledge region around `{job.title}` and its immediately related wiki notes.",
+            f"- The current share contributes `{len(job.tags)}` tags, `{sum(len(v) for v in classified.values())}` outbound links, and `{len(queries)}` follow-up research queries.",
+        ])
+        if related_paths:
+            lines.append("- Existing related wiki notes were detected, suggesting this share overlaps with an existing cluster rather than forming an isolated note.")
+        else:
+            lines.append("- No strong prior wiki cluster was found yet; treat this as a seed cluster until more related notes arrive.")
+
+        lines.extend(["", "## Key Signals", ""])
+        if job.tags:
+            lines.append(f"- Tags: {', '.join(job.tags)}")
+        else:
+            lines.append("- Tags: None")
+        if classified:
+            for kind, urls in classified.items():
+                lines.append(f"- {kind.title()}: {len(urls)} link(s)")
+        else:
+            lines.append("- Outbound links: none")
+
+        lines.extend(["", "## Covered Notes", ""])
+        for rel in covered_notes:
+            lines.append(f"- {rel}")
+
+        lines.extend(["", "## When To Drill Down", ""])
+        lines.append("- Open the fusion note for related links, follow-up queries, and source excerpt.")
+        if source_paths:
+            lines.append("- Open the source-grounded wiki notes when exact claims, metadata, or citations are needed.")
+        if related_paths:
+            lines.append("- Open the related wiki notes when comparing with prior concepts or extending the cluster.")
+
+        if queries:
+            lines.extend(["", "## Suggested Follow-up Queries", ""])
+            for query in queries:
+                lines.append(f"- {query}")
+
+        if search_results:
+            lines.extend(["", "## Search Seeds", ""])
+            for query, result in search_results.items():
+                summary = result.strip().splitlines()[0] if result.strip() else "(no result)"
+                lines.append(f"- {query}: {summary}")
+
+        gist_path.write_text(
+            f"---\n{yaml.safe_dump(frontmatter, allow_unicode=True, sort_keys=False).strip()}\n---\n\n"
+            + "\n".join(lines).strip()
+            + "\n",
+            encoding="utf-8",
+        )
+        return gist_path
+
+    def _ensure_maintenance_files(self) -> None:
+        if not self.index_path.exists():
+            self.index_path.write_text(
+                "# Knowledge Index\n\n"
+                "Canonical navigation file for the vault.\n\n"
+                "## Recently Maintained\n\n"
+                "- None yet\n",
+                encoding="utf-8",
+            )
+        if not self.log_path.exists():
+            self.log_path.write_text(
+                "# Knowledge Log\n\n"
+                "Append-only record of ingests, promotions, restructures, and lint passes.\n",
+                encoding="utf-8",
+            )
+
+    def _update_index(self, *, gist_rel: str, fusion_rel: str) -> None:
+        text = self.index_path.read_text(encoding="utf-8")
+        if "## Recently Maintained" not in text:
+            text = text.rstrip() + "\n\n## Recently Maintained\n\n- None yet\n"
+        for bullet in (f"- [Latest gist]({gist_rel})", f"- [Latest fusion note]({fusion_rel})"):
+            if bullet in text:
+                continue
+            if "- None yet" in text:
+                text = text.replace("- None yet", bullet, 1)
+            else:
+                text = text.rstrip() + f"\n{bullet}\n"
+        self.index_path.write_text(text, encoding="utf-8")
+
+    def _append_log(
+        self,
+        *,
+        job: KnowledgeExpansionJob,
+        fusion_rel: str,
+        gist_rel: str,
+        source_paths: list[str],
+        related_paths: list[str],
+    ) -> None:
+        date_prefix = timestamp().split("T", 1)[0]
+        related_text = ", ".join(related_paths) if related_paths else "None"
+        source_text = ", ".join(source_paths) if source_paths else "None"
+        query_text = ", ".join(self._trim_queries(job.suggested_queries)) if job.suggested_queries else "None"
+        review_items = [
+            "- Verify that the fusion note reflects the current center of gravity of this cluster.",
+            "- Verify that the gist is an appropriate abstraction and not a duplicate of the fusion note.",
+            "- Verify whether any related existing notes should be edited manually instead of only being linked.",
+        ]
+        if not related_paths:
+            review_items.append("- Check whether this share should seed a brand-new cluster or be merged into an existing one later.")
+        if job.cross_domain or job.bridges:
+            review_items.append("- Review the cross-domain bridge decision and confirm the linked domains are justified.")
+        if job.source_url:
+            review_items.append("- Open the original source and confirm that the key framing was preserved correctly.")
+        lines = [
+            "",
+            f"## [{date_prefix}] maintenance | Processed shared knowledge for {job.title}",
+            "",
+            "### Trigger",
+            "",
+            f"- Source kind: `{job.source_kind}`",
+            f"- Source URL: {job.source_url or 'None'}",
+            f"- User/channel: `{job.user_key}` via `{job.channel}`",
+        ]
+        lines.extend([
+            "",
+            "### Decision",
+            "",
+            f"- Classified domain: `{job.domain}`",
+            f"- Subdomain/cluster seed: `{job.subdomain or job.title}`",
+            f"- Follow-up queries prepared: {query_text}",
+            f"- Related notes discovered before writing: {related_text}",
+            "",
+            "### Writes",
+            "",
+            f"- Fusion note: `{fusion_rel}`",
+            f"- Gist note: `{gist_rel}`",
+            f"- Source-backed note paths resolved: {source_text}",
+            "",
+            "### Related Notes Considered",
+            "",
+            f"- {related_text}" if related_paths else "- None",
+            "",
+            "### Review Checklist",
+            "",
+            *review_items,
+        ])
+        with open(self.log_path, "a", encoding="utf-8") as handle:
+            handle.write("\n".join(lines) + "\n")
+
+    @staticmethod
+    def _split_frontmatter(text: str) -> tuple[dict[str, Any], str]:
+        if not text.startswith("---\n"):
+            return {}, text
+        payload = text[4:]
+        if "\n---\n" not in payload:
+            return {}, text
+        raw_meta, body = payload.split("\n---\n", 1)
+        try:
+            meta = yaml.safe_load(raw_meta) or {}
+        except yaml.YAMLError:
+            meta = {}
+        return meta if isinstance(meta, dict) else {}, body.strip()
+
+    @staticmethod
+    def _coerce_str_list(value: Any) -> list[str]:
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()]
+        if isinstance(value, str) and value.strip():
+            return [value.strip()]
+        return []
+
+    @staticmethod
+    def _tokenize(text: str) -> list[str]:
+        return [
+            token for token in re.split(r"[^a-z0-9\u4e00-\u9fff]+", text.lower())
+            if len(token) >= 2
+        ]

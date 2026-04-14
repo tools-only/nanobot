@@ -179,6 +179,7 @@ class KnowledgeExpansionConfig(Base):
     """Background knowledge fusion and expansion settings."""
 
     enabled: bool = True
+    auto_maintain_on_share: bool = True
     auto_queue_on_ingest: bool = False
     auto_run_on_ingest: bool = False
     max_queries_per_job: int = Field(default=3, ge=1, le=10)

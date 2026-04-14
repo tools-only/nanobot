@@ -1155,6 +1155,7 @@ def knowledge_status():
     console.print("\n[bold]Expansion[/bold]")
     console.print_json(json.dumps({
         "enabled": expansion.config.enabled,
+        "auto_maintain_on_share": expansion.config.auto_maintain_on_share,
         "auto_queue_on_ingest": expansion.config.auto_queue_on_ingest,
         "auto_run_on_ingest": expansion.config.auto_run_on_ingest,
         "allow_web_search": expansion.config.allow_web_search,

@@ -136,7 +136,7 @@ class FilesystemKnowledgeStore(KnowledgeStore):
             layer=inferred_layer,
             kind=inferred_kind,
             status=str(meta.get("status") or "active"),
-            claim_type=str(meta.get("claim_type") or ("synthesis" if inferred_layer == "synthesis" else "fact")),
+            claim_type=str(meta.get("claim_type") or ("synthesis" if inferred_layer in {"synthesis", "gist"} else "fact")),
             domain=inferred_domain,
             subdomain=meta.get("subdomain"),
             cross_domain=bool(meta.get("cross_domain", False)),
@@ -164,6 +164,8 @@ class FilesystemKnowledgeStore(KnowledgeStore):
             return "raw"
         if "parsed" in rel_parts:
             return "parsed"
+        if "gist" in rel_parts:
+            return "gist"
         if "synthesis" in rel_parts:
             return "synthesis"
         if "research" in rel_parts and "fusion" in rel_parts:
@@ -176,6 +178,8 @@ class FilesystemKnowledgeStore(KnowledgeStore):
             return kind
         if path is not None:
             rel_parts = path.relative_to(self.root).parts
+            if "gist" in rel_parts:
+                return "gist"
             if "fusion" in rel_parts:
                 return "fusion"
             if "topics" in rel_parts:

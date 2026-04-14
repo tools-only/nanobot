@@ -130,14 +130,30 @@ class PersonalizationGateway:
             metadata={"channel": msg.channel, "chat_id": msg.chat_id},
         ))
         memory_promotions = self.memory_layers.evaluate_promotions(memory_units)
+        auto_maintain_share = (
+            self.config.knowledge.expansion.enabled
+            and self.config.knowledge.expansion.auto_maintain_on_share
+        )
         knowledge_activity = self.xiaohongshu.collect_from_message(
             text=msg.content,
             user_key=plan.state.user_key,
             channel=msg.channel,
+            queue_expansion=True if auto_maintain_share else None,
         )
         expansion_outputs: list[str] = []
-        if knowledge_activity is not None and self.config.knowledge.expansion.enabled and self.config.knowledge.expansion.auto_run_on_ingest:
-            expansion_outputs = [str(path) for path in self.expansion.run_pending(limit=5, with_search=False)]
+        should_run_expansion = (
+            knowledge_activity is not None
+            and self.config.knowledge.expansion.enabled
+            and (auto_maintain_share or self.config.knowledge.expansion.auto_run_on_ingest)
+        )
+        if should_run_expansion:
+            expansion_outputs = [
+                str(path)
+                for path in self.expansion.run_pending(
+                    limit=5,
+                    with_search=self.config.knowledge.expansion.allow_web_search,
+                )
+            ]
         self.store.append_turn({
             "event": "turn_completed",
             "user_key": plan.state.user_key,
@@ -160,6 +176,7 @@ class PersonalizationGateway:
                     "warnings": knowledge_activity.warnings,
                 },
                 "expansion_outputs": expansion_outputs,
+                "auto_maintain_on_share": auto_maintain_share,
             },
             "final_content": final_content,
             "message_count": len(new_messages),
