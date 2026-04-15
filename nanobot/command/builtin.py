@@ -135,8 +135,9 @@ async def cmd_finance(ctx: CommandContext) -> OutboundMessage:
         provider=ctx.loop.provider,
         model=ctx.loop.model,
         workspace=ctx.loop.workspace,
+        subagents=ctx.loop.subagents,
     )
-    episode = await service.analyze(task)
+    episode = await service.analyze(task, session_key=ctx.key)
     return OutboundMessage(
         channel=ctx.msg.channel,
         chat_id=ctx.msg.chat_id,

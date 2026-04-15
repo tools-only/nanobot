@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -33,11 +34,13 @@ from nanobot.finance_agentic.contracts import (
     RiskAssessment,
     RoundRecord,
     RoundtableMessage,
+    SubagentTrace,
     task_from_dict,
     to_dict,
 )
 from nanobot.finance_agentic.memory import PrivateFinanceMemory, SharedFinanceMemory
 from nanobot.personalization.store import PersonalizationStore
+from nanobot.agent.subagent import SubagentManager
 from nanobot.providers.base import LLMProvider
 from nanobot.utils.helpers import ensure_dir, safe_filename, timestamp
 
@@ -53,6 +56,11 @@ def _flatten_issues(packets: list[CritiquePacket]) -> list[str]:
             if issue not in issues:
                 issues.append(issue)
     return issues
+
+
+def _digest_text(payload: Any) -> str:
+    text = payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha1(text.encode("utf-8")).hexdigest()[:12]
 
 
 def parse_finance_task_argument(raw: str, workspace: Path) -> FinanceTask:
@@ -110,11 +118,19 @@ def format_episode_summary(episode: FinanceEpisode) -> str:
 class FinanceAgenticService:
     """Dynamic finance multi-agent orchestration backed by a nanobot provider."""
 
-    def __init__(self, provider: LLMProvider, model: str, workspace: Path, max_rounds: int = 3):
+    def __init__(
+        self,
+        provider: LLMProvider,
+        model: str,
+        workspace: Path,
+        max_rounds: int = 3,
+        subagents: SubagentManager | None = None,
+    ):
         self.provider = provider
         self.model = model
         self.workspace = workspace
         self.max_rounds = max_rounds
+        self.subagents = subagents
         self.memory = PrivateFinanceMemory(workspace)
         self.root = ensure_dir(workspace / "finance_agentic")
         self.episodes_dir = ensure_dir(self.root / "episodes")
@@ -122,40 +138,87 @@ class FinanceAgenticService:
         self.outcomes_dir = ensure_dir(self.root / "outcomes")
         self.reward_scores_dir = ensure_dir(self.root / "reward_scores")
 
-    async def _call_json(self, role: str, instruction: str, payload: dict[str, Any]) -> dict[str, Any]:
-        system_prompt = (
-            f"You are the {role} in a finance multi-agent system.\n"
-            "Return only one valid JSON object and no prose outside JSON.\n"
-            f"{instruction}"
+    async def _call_agent_json(
+        self,
+        role: str,
+        instruction: str,
+        payload: dict[str, Any],
+        *,
+        round_id: int,
+        session_key: str | None,
+    ) -> tuple[dict[str, Any], SubagentTrace]:
+        prompt = "\n".join(
+            [
+                f"You are the {role} in a finance multi-agent system.",
+                "Return only one valid JSON object and no prose outside JSON.",
+                instruction,
+                json.dumps(payload, ensure_ascii=False),
+            ]
         )
-        response = await self.provider.chat_with_retry(
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
-            ],
-            model=self.model,
-            max_tokens=1200,
-            temperature=0.2,
-        )
-        parsed = json_repair.loads(response.content or "{}")
+        if self.subagents is None:
+            response = await self.provider.chat_with_retry(
+                messages=[
+                    {"role": "system", "content": f"You are the {role} in a finance multi-agent system.\nReturn only one valid JSON object and no prose outside JSON.\n{instruction}"},
+                    {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+                ],
+                model=self.model,
+                max_tokens=1200,
+                temperature=0.2,
+            )
+            raw_result = response.content or "{}"
+            trace = SubagentTrace(
+                round_id=round_id,
+                agent_name=role,
+                task_id=f"inline-{role}-{round_id}",
+                label=role,
+                status="ok",
+                prompt_digest=_digest_text(prompt),
+                result_digest=_digest_text(raw_result),
+            )
+        else:
+            executed = await self.subagents.run_and_wait(
+                task=prompt,
+                label=role,
+                session_key=session_key,
+            )
+            raw_result = str(executed.get("result") or "{}")
+            trace = SubagentTrace(
+                round_id=round_id,
+                agent_name=role,
+                task_id=str(executed.get("task_id") or ""),
+                label=str(executed.get("label") or role),
+                status=str(executed.get("status") or "error"),
+                prompt_digest=_digest_text(prompt),
+                result_digest=_digest_text(raw_result),
+            )
+        parsed = json_repair.loads(raw_result)
         if not isinstance(parsed, dict):
             raise ValueError(f"{role} returned non-object JSON")
-        return parsed
+        return parsed, trace
 
-    async def _news_step(self, task: FinanceTask, critique: CritiquePacket | None = None) -> EventSummary:
+    async def _news_step(
+        self,
+        task: FinanceTask,
+        critique: CritiquePacket | None = None,
+        *,
+        round_id: int,
+        session_key: str | None,
+    ) -> tuple[EventSummary, SubagentTrace]:
         docs = self.memory.retrieve("news", [task.target_asset, *[item.headline for item in task.event_news]])
         payload = {
             "task": to_dict(task),
             "private_memory": docs,
             "critique_packet": None if critique is None else to_dict(critique),
         }
-        result = await self._call_json(
+        result, trace = await self._call_agent_json(
             "news_agent",
             (
                 "Produce keys: event_title, event_type, abstract, avg_sentiment, importance_score, "
                 "supporting_news_ids, entities, evidence_bullets."
             ),
             payload,
+            round_id=round_id,
+            session_key=session_key,
         )
         return EventSummary(
             event_title=str(result.get("event_title") or task.event_news[0].headline),
@@ -166,7 +229,7 @@ class FinanceAgenticService:
             supporting_news_ids=[str(x) for x in result.get("supporting_news_ids", [item.news_id for item in task.event_news])],
             entities=[str(x) for x in result.get("entities", [])],
             evidence_bullets=[str(x) for x in result.get("evidence_bullets", [])][:5],
-        )
+        ), trace
 
     async def _asset_step(
         self,
@@ -174,7 +237,10 @@ class FinanceAgenticService:
         news: EventSummary,
         risk: RiskAssessment | None = None,
         critique: CritiquePacket | None = None,
-    ) -> AssetPrediction:
+        *,
+        round_id: int,
+        session_key: str | None,
+    ) -> tuple[AssetPrediction, SubagentTrace]:
         docs = self.memory.retrieve("asset", [task.target_asset, news.event_type, *news.entities])
         payload = {
             "task": to_dict(task),
@@ -183,10 +249,12 @@ class FinanceAgenticService:
             "private_memory": docs,
             "critique_packet": None if critique is None else to_dict(critique),
         }
-        result = await self._call_json(
+        result, trace = await self._call_agent_json(
             "asset_agent",
             "Produce keys: direction, confidence, rationale, evidence_ids, cited_memory_ids.",
             payload,
+            round_id=round_id,
+            session_key=session_key,
         )
         direction = str(result.get("direction", "neutral")).lower()
         return AssetPrediction(
@@ -195,7 +263,7 @@ class FinanceAgenticService:
             rationale=str(result.get("rationale") or "No rationale provided."),
             evidence_ids=[str(x) for x in result.get("evidence_ids", news.supporting_news_ids[:3])],
             cited_memory_ids=[str(x) for x in result.get("cited_memory_ids", [doc.get("doc_id", "") for doc in docs[:2]]) if x],
-        )
+        ), trace
 
     async def _risk_step(
         self,
@@ -203,7 +271,10 @@ class FinanceAgenticService:
         news: EventSummary,
         asset: AssetPrediction,
         critique: CritiquePacket | None = None,
-    ) -> RiskAssessment:
+        *,
+        round_id: int,
+        session_key: str | None,
+    ) -> tuple[RiskAssessment, SubagentTrace]:
         docs = self.memory.retrieve("risk", [task.target_asset, news.event_type, "volatility"])
         payload = {
             "task": to_dict(task),
@@ -212,10 +283,12 @@ class FinanceAgenticService:
             "private_memory": docs,
             "critique_packet": None if critique is None else to_dict(critique),
         }
-        result = await self._call_json(
+        result, trace = await self._call_agent_json(
             "risk_agent",
             "Produce keys: risk_level, objections, suggested_direction, confidence_penalty.",
             payload,
+            round_id=round_id,
+            session_key=session_key,
         )
         suggested = result.get("suggested_direction")
         suggested_direction = None
@@ -226,7 +299,7 @@ class FinanceAgenticService:
             objections=[str(x) for x in result.get("objections", [])][:5],
             suggested_direction=suggested_direction,
             confidence_penalty=_clamp(float(result.get("confidence_penalty", 0.15))),
-        )
+        ), trace
 
     async def _critic_step(
         self,
@@ -236,7 +309,9 @@ class FinanceAgenticService:
         asset: AssetPrediction,
         risk: RiskAssessment,
         previous_asset: AssetPrediction | None,
-    ) -> CriticReview:
+        *,
+        session_key: str | None,
+    ) -> tuple[CriticReview, SubagentTrace]:
         docs = self.memory.retrieve("critic", [task.target_asset, "critic", "convergence"])
         payload = {
             "round_id": round_id,
@@ -247,7 +322,7 @@ class FinanceAgenticService:
             "previous_asset_output": None if previous_asset is None else to_dict(previous_asset),
             "private_memory": docs,
         }
-        result = await self._call_json(
+        result, trace = await self._call_agent_json(
             "critic_agent",
             (
                 "Produce keys: direction_quality, evidence_quality, risk_handling, revision_quality, "
@@ -255,6 +330,8 @@ class FinanceAgenticService:
                 "Each critique packet needs target_agent, status, severity, issues, repair_instructions, score."
             ),
             payload,
+            round_id=round_id,
+            session_key=session_key,
         )
         packets: list[CritiquePacket] = []
         for packet in result.get("critique_packets", []):
@@ -285,7 +362,7 @@ class FinanceAgenticService:
             blocking_issues_count=int(result.get("blocking_issues_count", len(packets))),
             critique_packets=packets,
             notes=[str(x) for x in result.get("notes", [])],
-        )
+        ), trace
 
     def _build_roundtable_messages(
         self,
@@ -391,8 +468,8 @@ class FinanceAgenticService:
             stop_reason=stop_reason,
         )
 
-    async def analyze(self, task: FinanceTask) -> FinanceEpisode:
-        news = await self._news_step(task)
+    async def analyze(self, task: FinanceTask, session_key: str | None = None) -> FinanceEpisode:
+        news, news_trace = await self._news_step(task, round_id=0, session_key=session_key)
         shared = SharedFinanceMemory(
             event_object={
                 "task_id": task.task_id,
@@ -404,27 +481,38 @@ class FinanceAgenticService:
             market_summary=task.market_snapshot,
         )
         shared.add_public_evidence(news.evidence_bullets)
-        asset = await self._asset_step(task, news)
-        risk = await self._risk_step(task, news, asset)
+        asset, asset_trace = await self._asset_step(task, news, round_id=0, session_key=session_key)
+        risk, risk_trace = await self._risk_step(task, news, asset, round_id=0, session_key=session_key)
 
         rounds: list[RoundRecord] = []
         previous_asset: AssetPrediction | None = None
         previous_critic: CriticReview | None = None
         active_agents = ["news", "asset", "risk"]
+        pending_traces: list[SubagentTrace] = [news_trace, asset_trace, risk_trace]
 
         for round_id in range(1, self.max_rounds + 1):
             messages = self._build_roundtable_messages(round_id, news, asset, risk, active_agents)
             shared.add_roundtable_messages(messages)
-            critic = await self._critic_step(round_id, task, news, asset, risk, previous_asset)
+            critic, critic_trace = await self._critic_step(
+                round_id,
+                task,
+                news,
+                asset,
+                risk,
+                previous_asset,
+                session_key=session_key,
+            )
             previous_open_issues = list(shared.open_issues)
             current_issues = _flatten_issues(critic.critique_packets)
             shared.update_open_issues(current_issues)
             shared.resolve_issues([issue for issue in previous_open_issues if issue not in current_issues])
             convergence = self._build_convergence(round_id, asset, risk, critic, previous_asset, previous_critic)
+            round_traces = list(pending_traces) + [critic_trace]
             rounds.append(
                 RoundRecord(
                     round_id=round_id,
                     active_agents=list(active_agents),
+                    subagent_traces=round_traces,
                     roundtable_messages=messages,
                     critic_review=critic,
                     convergence_report=convergence,
@@ -437,23 +525,29 @@ class FinanceAgenticService:
                 break
             packets = {packet.target_agent: packet for packet in critic.critique_packets}
             next_active_agents: list[str] = []
+            pending_traces = []
             if "news" in packets:
-                news = await self._news_step(task, packets["news"])
+                news, trace = await self._news_step(task, packets["news"], round_id=round_id, session_key=session_key)
                 shared.add_public_evidence(news.evidence_bullets)
                 next_active_agents.append("news")
+                pending_traces.append(trace)
             if "asset" in packets:
-                asset = await self._asset_step(task, news, risk, packets["asset"])
+                asset, trace = await self._asset_step(task, news, risk, packets["asset"], round_id=round_id, session_key=session_key)
                 next_active_agents.append("asset")
+                pending_traces.append(trace)
             if "risk" in packets:
-                risk = await self._risk_step(task, news, asset, packets["risk"])
+                risk, trace = await self._risk_step(task, news, asset, packets["risk"], round_id=round_id, session_key=session_key)
                 next_active_agents.append("risk")
+                pending_traces.append(trace)
             if "news" in packets and "asset" not in packets:
-                asset = await self._asset_step(task, news, risk)
+                asset, trace = await self._asset_step(task, news, risk, round_id=round_id, session_key=session_key)
                 next_active_agents.append("asset")
+                pending_traces.append(trace)
             if "asset" in packets or "news" in packets:
-                risk = await self._risk_step(task, news, asset)
+                risk, trace = await self._risk_step(task, news, asset, round_id=round_id, session_key=session_key)
                 if "risk" not in next_active_agents:
                     next_active_agents.append("risk")
+                pending_traces.append(trace)
             previous_asset = asset
             previous_critic = critic
             active_agents = next_active_agents or ["asset"]

@@ -84,6 +84,17 @@ class RoundtableMessage:
 
 
 @dataclass(slots=True)
+class SubagentTrace:
+    round_id: int
+    agent_name: str
+    task_id: str
+    label: str
+    status: str
+    prompt_digest: str
+    result_digest: str
+
+
+@dataclass(slots=True)
 class CritiquePacket:
     round_id: int
     target_agent: str
@@ -126,6 +137,7 @@ class ConvergenceReport:
 class RoundRecord:
     round_id: int
     active_agents: list[str]
+    subagent_traces: list[SubagentTrace]
     roundtable_messages: list[RoundtableMessage]
     critic_review: CriticReview
     convergence_report: ConvergenceReport
