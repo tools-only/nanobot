@@ -34,7 +34,9 @@ from nanobot.finance_agentic.contracts import (
     RiskAssessment,
     RoundRecord,
     RoundtableMessage,
+    SubagentCritique,
     SubagentTrace,
+    SubagentWorklog,
     task_from_dict,
     to_dict,
 )
@@ -61,6 +63,42 @@ def _flatten_issues(packets: list[CritiquePacket]) -> list[str]:
 def _digest_text(payload: Any) -> str:
     text = payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False, sort_keys=True)
     return hashlib.sha1(text.encode("utf-8")).hexdigest()[:12]
+
+
+def _shorten(text: str, limit: int = 160) -> str:
+    compact = " ".join((text or "").split())
+    if len(compact) <= limit:
+        return compact
+    return compact[: limit - 3] + "..."
+
+
+def _default_worklog(trace: SubagentTrace) -> SubagentWorklog:
+    return SubagentWorklog(
+        round_id=trace.round_id,
+        agent_name=trace.agent_name,
+        task_id=trace.task_id,
+        status=trace.status,
+        input_summary=f"Prompt digest {trace.prompt_digest}",
+        output_summary=f"Result digest {trace.result_digest}",
+        public_contribution=f"{trace.agent_name} contributed to the round output.",
+        open_issues=[],
+    )
+
+
+def _default_critique(trace: SubagentTrace, should_refine: bool) -> SubagentCritique:
+    return SubagentCritique(
+        round_id=trace.round_id,
+        agent_name=trace.agent_name,
+        task_id=trace.task_id,
+        work_quality=0.5,
+        evidence_quality=0.5,
+        responsiveness_to_critique=0.5,
+        summary=_shorten(f"{trace.agent_name} completed work with status {trace.status}."),
+        strengths=[],
+        weaknesses=[],
+        action_items=[],
+        should_refine=should_refine,
+    )
 
 
 def parse_finance_task_argument(raw: str, workspace: Path) -> FinanceTask:
@@ -112,6 +150,107 @@ def format_episode_summary(episode: FinanceEpisode) -> str:
     ]
     if risk.objections:
         lines.append(f"Top risk: {risk.objections[0]}")
+    return "\n".join(lines)
+
+
+def render_episode_log(episode: FinanceEpisode) -> str:
+    final = episode.final_asset_output
+    critic = episode.final_critic_review
+    convergence = episode.final_convergence_report
+    lines = [
+        f"# Finance Episode {episode.episode_id}",
+        "",
+        "## Overview",
+        f"- Task ID: {episode.task_id}",
+        f"- Policy Version: {episode.policy_version}",
+        f"- Asset: {episode.shared_memory_snapshot['event_object'].get('target_asset', 'unknown')}",
+        f"- Final Direction: {final.direction.value}",
+        f"- Final Confidence: {final.confidence:.2f}",
+        f"- Critic Verdict: {critic.verdict.value}",
+        f"- Stop Reason: {convergence.stop_reason or 'n/a'}",
+        "",
+    ]
+    for round_record in episode.rounds:
+        lines.extend(
+            [
+                f"## Round {round_record.round_id}",
+                f"- Active Agents: {', '.join(round_record.active_agents) if round_record.active_agents else 'n/a'}",
+                f"- Critic Verdict: {round_record.critic_review.verdict.value}",
+                f"- Convergence Score: {round_record.convergence_report.convergence_score:.2f}",
+                f"- Stop Flag: {round_record.convergence_report.should_stop}",
+                "",
+                "### Subagent Traces",
+            ]
+        )
+        for trace in round_record.subagent_traces:
+            lines.extend(
+                [
+                    f"- {trace.agent_name} [{trace.task_id}]",
+                    f"  Status: {trace.status}",
+                    f"  Prompt Digest: {trace.prompt_digest}",
+                    f"  Result Digest: {trace.result_digest}",
+                ]
+            )
+        lines.append("")
+        lines.append("### Roundtable")
+        for message in round_record.roundtable_messages:
+            lines.extend(
+                [
+                    f"- {message.speaker}: {message.claim}",
+                    f"  Confidence: {message.confidence:.2f}",
+                    f"  Evidence: {', '.join(message.evidence) if message.evidence else 'n/a'}",
+                    f"  Objections: {', '.join(message.objection_to_others) if message.objection_to_others else 'n/a'}",
+                ]
+            )
+        lines.append("")
+        lines.append("### Critic Worklogs")
+        for worklog in round_record.critic_review.subagent_worklogs:
+            lines.extend(
+                [
+                    f"- {worklog.agent_name} [{worklog.task_id}]",
+                    f"  Status: {worklog.status}",
+                    f"  Input: {worklog.input_summary}",
+                    f"  Output: {worklog.output_summary}",
+                    f"  Contribution: {worklog.public_contribution}",
+                    f"  Open Issues: {', '.join(worklog.open_issues) if worklog.open_issues else 'none'}",
+                ]
+            )
+        lines.append("")
+        lines.append("### Critic Critiques")
+        for critique in round_record.critic_review.subagent_critiques:
+            lines.extend(
+                [
+                    f"- {critique.agent_name} [{critique.task_id}]",
+                    f"  Summary: {critique.summary}",
+                    f"  Scores: work={critique.work_quality:.2f}, evidence={critique.evidence_quality:.2f}, responsiveness={critique.responsiveness_to_critique:.2f}",
+                    f"  Strengths: {', '.join(critique.strengths) if critique.strengths else 'none'}",
+                    f"  Weaknesses: {', '.join(critique.weaknesses) if critique.weaknesses else 'none'}",
+                    f"  Action Items: {', '.join(critique.action_items) if critique.action_items else 'none'}",
+                    f"  Should Refine: {critique.should_refine}",
+                ]
+            )
+        lines.append("")
+        lines.append("### Critique Packets")
+        for packet in round_record.critic_review.critique_packets:
+            lines.extend(
+                [
+                    f"- Target: {packet.target_agent}",
+                    f"  Status: {packet.status} | Severity: {packet.severity}",
+                    f"  Issues: {', '.join(packet.issues) if packet.issues else 'none'}",
+                    f"  Repairs: {', '.join(packet.repair_instructions) if packet.repair_instructions else 'none'}",
+                ]
+            )
+        if not round_record.critic_review.critique_packets:
+            lines.append("- none")
+        lines.append("")
+    lines.extend(
+        [
+            "## Final Conclusion",
+            f"- Direction: {final.direction.value}",
+            f"- Confidence: {final.confidence:.2f}",
+            f"- Rationale: {final.rationale}",
+        ]
+    )
     return "\n".join(lines)
 
 
@@ -309,6 +448,8 @@ class FinanceAgenticService:
         asset: AssetPrediction,
         risk: RiskAssessment,
         previous_asset: AssetPrediction | None,
+        subagent_traces: list[SubagentTrace],
+        roundtable_messages: list[RoundtableMessage],
         *,
         session_key: str | None,
     ) -> tuple[CriticReview, SubagentTrace]:
@@ -320,19 +461,61 @@ class FinanceAgenticService:
             "asset_output": to_dict(asset),
             "risk_output": to_dict(risk),
             "previous_asset_output": None if previous_asset is None else to_dict(previous_asset),
+            "subagent_traces": [to_dict(item) for item in subagent_traces],
+            "roundtable_messages": [to_dict(item) for item in roundtable_messages],
             "private_memory": docs,
         }
         result, trace = await self._call_agent_json(
             "critic_agent",
             (
                 "Produce keys: direction_quality, evidence_quality, risk_handling, revision_quality, "
-                "format_compliance, final_score, verdict, blocking_issues_count, critique_packets, notes. "
+                "format_compliance, final_score, verdict, blocking_issues_count, subagent_worklogs, "
+                "subagent_critiques, critique_packets, notes. "
+                "Each subagent_worklog needs: agent_name, task_id, status, input_summary, output_summary, "
+                "public_contribution, open_issues. "
+                "Each subagent_critique needs: agent_name, task_id, work_quality, evidence_quality, "
+                "responsiveness_to_critique, summary, strengths, weaknesses, action_items, should_refine. "
                 "Each critique packet needs target_agent, status, severity, issues, repair_instructions, score."
             ),
             payload,
             round_id=round_id,
             session_key=session_key,
         )
+        worklogs: list[SubagentWorklog] = []
+        for item in result.get("subagent_worklogs", []):
+            if not isinstance(item, dict):
+                continue
+            worklogs.append(
+                SubagentWorklog(
+                    round_id=round_id,
+                    agent_name=str(item.get("agent_name") or ""),
+                    task_id=str(item.get("task_id") or ""),
+                    status=str(item.get("status") or "unknown"),
+                    input_summary=str(item.get("input_summary") or ""),
+                    output_summary=str(item.get("output_summary") or ""),
+                    public_contribution=str(item.get("public_contribution") or ""),
+                    open_issues=[str(x) for x in item.get("open_issues", [])],
+                )
+            )
+        critiques: list[SubagentCritique] = []
+        for item in result.get("subagent_critiques", []):
+            if not isinstance(item, dict):
+                continue
+            critiques.append(
+                SubagentCritique(
+                    round_id=round_id,
+                    agent_name=str(item.get("agent_name") or ""),
+                    task_id=str(item.get("task_id") or ""),
+                    work_quality=_clamp(float(item.get("work_quality", 0.5))),
+                    evidence_quality=_clamp(float(item.get("evidence_quality", 0.5))),
+                    responsiveness_to_critique=_clamp(float(item.get("responsiveness_to_critique", 0.5))),
+                    summary=str(item.get("summary") or ""),
+                    strengths=[str(x) for x in item.get("strengths", [])],
+                    weaknesses=[str(x) for x in item.get("weaknesses", [])],
+                    action_items=[str(x) for x in item.get("action_items", [])],
+                    should_refine=bool(item.get("should_refine", False)),
+                )
+            )
         packets: list[CritiquePacket] = []
         for packet in result.get("critique_packets", []):
             if not isinstance(packet, dict):
@@ -348,6 +531,14 @@ class FinanceAgenticService:
                     score={str(k): float(v) for k, v in dict(packet.get("score", {})).items()},
                 )
             )
+        worklog_index = {item.agent_name: item for item in worklogs}
+        critique_index = {item.agent_name: item for item in critiques}
+        targeted_agents = {packet.target_agent for packet in packets}
+        for item in subagent_traces:
+            if item.agent_name not in worklog_index:
+                worklogs.append(_default_worklog(item))
+            if item.agent_name not in critique_index:
+                critiques.append(_default_critique(item, item.agent_name in targeted_agents))
         verdict_raw = str(result.get("verdict", "revise")).lower()
         verdict = CriticVerdict(verdict_raw if verdict_raw in {"accept", "revise", "reject"} else "revise")
         return CriticReview(
@@ -360,6 +551,8 @@ class FinanceAgenticService:
             final_score=_clamp(float(result.get("final_score", 0.5))),
             verdict=verdict,
             blocking_issues_count=int(result.get("blocking_issues_count", len(packets))),
+            subagent_worklogs=worklogs,
+            subagent_critiques=critiques,
             critique_packets=packets,
             notes=[str(x) for x in result.get("notes", [])],
         ), trace
@@ -493,6 +686,7 @@ class FinanceAgenticService:
         for round_id in range(1, self.max_rounds + 1):
             messages = self._build_roundtable_messages(round_id, news, asset, risk, active_agents)
             shared.add_roundtable_messages(messages)
+            current_subagent_traces = list(pending_traces)
             critic, critic_trace = await self._critic_step(
                 round_id,
                 task,
@@ -500,6 +694,8 @@ class FinanceAgenticService:
                 asset,
                 risk,
                 previous_asset,
+                current_subagent_traces,
+                messages,
                 session_key=session_key,
             )
             previous_open_issues = list(shared.open_issues)
@@ -507,7 +703,7 @@ class FinanceAgenticService:
             shared.update_open_issues(current_issues)
             shared.resolve_issues([issue for issue in previous_open_issues if issue not in current_issues])
             convergence = self._build_convergence(round_id, asset, risk, critic, previous_asset, previous_critic)
-            round_traces = list(pending_traces) + [critic_trace]
+            round_traces = current_subagent_traces + [critic_trace]
             rounds.append(
                 RoundRecord(
                     round_id=round_id,
@@ -580,6 +776,8 @@ class FinanceAgenticService:
     def write_episode(self, episode: FinanceEpisode) -> Path:
         path = self.episodes_dir / f"{episode.episode_id}.json"
         path.write_text(json.dumps(to_dict(episode), ensure_ascii=False, indent=2), encoding="utf-8")
+        log_path = self.episodes_dir / f"{episode.episode_id}.log.md"
+        log_path.write_text(render_episode_log(episode), encoding="utf-8")
         return path
 
 

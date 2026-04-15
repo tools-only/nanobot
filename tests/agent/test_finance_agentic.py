@@ -14,6 +14,7 @@ from nanobot.finance_agentic.service import (
     FinanceAgenticService,
     enqueue_offpolicy_reward_requests,
     process_offpolicy_reward_requests,
+    render_episode_log,
 )
 from nanobot.personalization.store import PersonalizationStore
 from nanobot.providers.base import LLMProvider, LLMResponse
@@ -269,6 +270,40 @@ class FakeSubagentManager:
                     "final_score": 0.58,
                     "verdict": "revise",
                     "blocking_issues_count": 1,
+                    "subagent_worklogs": [
+                        {
+                            "agent_name": "news_agent",
+                            "task_id": "new-0",
+                            "status": "ok",
+                            "input_summary": "Reviewed the tariff headline set and normalized the event.",
+                            "output_summary": "Produced a macro_policy event summary with evidence bullets.",
+                            "public_contribution": "Shared the event framing and evidence in the roundtable.",
+                            "open_issues": [],
+                        },
+                        {
+                            "agent_name": "asset_agent",
+                            "task_id": "ass-0",
+                            "status": "ok",
+                            "input_summary": "Combined event summary and market snapshot for AAPL.",
+                            "output_summary": "Produced a bearish T+3 thesis with medium confidence.",
+                            "public_contribution": "Shared the first-pass directional view.",
+                            "open_issues": ["Needs a stronger rebuttal to hedge and policy-delay risks."],
+                        },
+                    ],
+                    "subagent_critiques": [
+                        {
+                            "agent_name": "asset_agent",
+                            "task_id": "ass-0",
+                            "work_quality": 0.61,
+                            "evidence_quality": 0.57,
+                            "responsiveness_to_critique": 0.40,
+                            "summary": "Asset thesis is directionally plausible but under-responds to the top objection.",
+                            "strengths": ["Clear directional call."],
+                            "weaknesses": ["Risk rebuttal is too thin."],
+                            "action_items": ["Address why downside still dominates after hedge and policy-delay risks."],
+                            "should_refine": True,
+                        }
+                    ],
                     "critique_packets": [
                         {
                             "target_agent": "asset",
@@ -294,6 +329,31 @@ class FakeSubagentManager:
                     "final_score": 0.83,
                     "verdict": "accept",
                     "blocking_issues_count": 0,
+                    "subagent_worklogs": [
+                        {
+                            "agent_name": "asset_agent",
+                            "task_id": "ass-1",
+                            "status": "ok",
+                            "input_summary": "Re-read the critique packet and latest risk view.",
+                            "output_summary": "Revised the bearish thesis with lower confidence and explicit rebuttal.",
+                            "public_contribution": "Published the updated direction and rationale.",
+                            "open_issues": [],
+                        }
+                    ],
+                    "subagent_critiques": [
+                        {
+                            "agent_name": "asset_agent",
+                            "task_id": "ass-1",
+                            "work_quality": 0.84,
+                            "evidence_quality": 0.79,
+                            "responsiveness_to_critique": 0.88,
+                            "summary": "Asset agent responded well to critique and closed the main issue.",
+                            "strengths": ["Integrated the key objection.", "Adjusted confidence appropriately."],
+                            "weaknesses": [],
+                            "action_items": [],
+                            "should_refine": False,
+                        }
+                    ],
                     "critique_packets": [],
                     "notes": ["Converged after targeted asset refinement."],
                 }
@@ -329,8 +389,18 @@ async def test_finance_service_runs_dynamic_roundtable_and_self_refine(tmp_path)
     assert any(message.speaker == "risk" for message in episode.rounds[0].roundtable_messages)
     assert any(trace.agent_name == "news_agent" for trace in episode.rounds[0].subagent_traces)
     assert any(trace.agent_name == "critic_agent" for trace in episode.rounds[1].subagent_traces)
+    assert any(item.agent_name == "asset_agent" for item in episode.rounds[0].critic_review.subagent_worklogs)
+    assert any(item.should_refine for item in episode.rounds[0].critic_review.subagent_critiques)
+    assert any(item.agent_name == "risk_agent" for item in episode.rounds[0].critic_review.subagent_worklogs)
     assert all(call[2] is None for call in subagents.calls)
     assert (tmp_path / "finance_agentic" / "episodes" / f"{episode.episode_id}.json").exists()
+    log_path = tmp_path / "finance_agentic" / "episodes" / f"{episode.episode_id}.log.md"
+    assert log_path.exists()
+    log_text = log_path.read_text(encoding="utf-8")
+    assert "## Round 1" in log_text
+    assert "### Critic Worklogs" in log_text
+    assert "### Critic Critiques" in log_text
+    assert "### Critique Packets" in log_text
 
 
 @pytest.mark.asyncio
@@ -403,3 +473,25 @@ async def test_finance_command_returns_episode_summary(tmp_path):
     assert out.metadata["render_as"] == "text"
     assert out.metadata["episode_id"]
     assert any(call[2] == msg.session_key for call in subagents.calls)
+
+
+def test_render_episode_log_contains_subagent_and_critic_sections(tmp_path):
+    provider = ScriptedFinanceProvider()
+    subagents = FakeSubagentManager()
+    service = FinanceAgenticService(
+        provider=provider,
+        model="scripted-finance-model",
+        workspace=tmp_path,
+        max_rounds=3,
+        subagents=subagents,
+    )
+
+    import asyncio
+
+    episode = asyncio.run(service.analyze(_sample_task()))
+    log_text = render_episode_log(episode)
+
+    assert "# Finance Episode" in log_text
+    assert "### Subagent Traces" in log_text
+    assert "### Critic Worklogs" in log_text
+    assert "### Critic Critiques" in log_text

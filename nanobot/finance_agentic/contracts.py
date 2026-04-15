@@ -95,6 +95,33 @@ class SubagentTrace:
 
 
 @dataclass(slots=True)
+class SubagentWorklog:
+    round_id: int
+    agent_name: str
+    task_id: str
+    status: str
+    input_summary: str
+    output_summary: str
+    public_contribution: str
+    open_issues: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class SubagentCritique:
+    round_id: int
+    agent_name: str
+    task_id: str
+    work_quality: float
+    evidence_quality: float
+    responsiveness_to_critique: float
+    summary: str
+    strengths: list[str] = field(default_factory=list)
+    weaknesses: list[str] = field(default_factory=list)
+    action_items: list[str] = field(default_factory=list)
+    should_refine: bool = False
+
+
+@dataclass(slots=True)
 class CritiquePacket:
     round_id: int
     target_agent: str
@@ -116,6 +143,8 @@ class CriticReview:
     final_score: float
     verdict: CriticVerdict
     blocking_issues_count: int
+    subagent_worklogs: list[SubagentWorklog] = field(default_factory=list)
+    subagent_critiques: list[SubagentCritique] = field(default_factory=list)
     critique_packets: list[CritiquePacket] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
 
