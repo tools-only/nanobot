@@ -9,6 +9,13 @@ import sys
 from nanobot import __version__
 from nanobot.bus.events import OutboundMessage
 from nanobot.command.router import CommandContext, CommandRouter
+from nanobot.finance_agentic import (
+    FinanceAgenticService,
+    enqueue_offpolicy_reward_requests,
+    format_episode_summary,
+    process_offpolicy_reward_requests,
+)
+from nanobot.finance_agentic.service import parse_finance_task_argument
 from nanobot.utils.helpers import build_status_content
 
 
@@ -91,11 +98,77 @@ async def cmd_help(ctx: CommandContext) -> OutboundMessage:
         "/restart — Restart the bot",
         "/status — Show bot status",
         "/help — Show available commands",
+        "/finance — Run the finance roundtable workflow",
+        "/finance-enqueue-reward — Queue off-policy reward scoring",
+        "/finance-score-reward — Process queued reward scoring",
     ]
     return OutboundMessage(
         channel=ctx.msg.channel,
         chat_id=ctx.msg.chat_id,
         content="\n".join(lines),
+        metadata={"render_as": "text"},
+    )
+
+
+async def cmd_finance_help(ctx: CommandContext) -> OutboundMessage:
+    """Return finance workflow command help."""
+    content = "\n".join(
+        [
+            "Finance agentic commands:",
+            "/finance <task-json | task-file | thesis>",
+            "/finance-enqueue-reward",
+            "/finance-score-reward",
+        ]
+    )
+    return OutboundMessage(
+        channel=ctx.msg.channel,
+        chat_id=ctx.msg.chat_id,
+        content=content,
+        metadata={"render_as": "text"},
+    )
+
+
+async def cmd_finance(ctx: CommandContext) -> OutboundMessage:
+    """Run the finance roundtable workflow on a single task."""
+    task = parse_finance_task_argument(ctx.args, ctx.loop.workspace)
+    service = FinanceAgenticService(
+        provider=ctx.loop.provider,
+        model=ctx.loop.model,
+        workspace=ctx.loop.workspace,
+    )
+    episode = await service.analyze(task)
+    return OutboundMessage(
+        channel=ctx.msg.channel,
+        chat_id=ctx.msg.chat_id,
+        content=format_episode_summary(episode),
+        metadata={"render_as": "text", "episode_id": episode.episode_id},
+    )
+
+
+async def cmd_finance_enqueue_reward(ctx: CommandContext) -> OutboundMessage:
+    """Queue finance episodes for async off-policy reward scoring."""
+    queued = enqueue_offpolicy_reward_requests(ctx.loop.workspace)
+    content = f"Queued {queued} finance reward request(s)."
+    return OutboundMessage(
+        channel=ctx.msg.channel,
+        chat_id=ctx.msg.chat_id,
+        content=content,
+        metadata={"render_as": "text"},
+    )
+
+
+async def cmd_finance_score_reward(ctx: CommandContext) -> OutboundMessage:
+    """Process queued off-policy finance reward requests."""
+    processed = await process_offpolicy_reward_requests(
+        workspace=ctx.loop.workspace,
+        provider=ctx.loop.provider,
+        model=ctx.loop.model,
+    )
+    content = f"Processed {processed} finance reward score(s)."
+    return OutboundMessage(
+        channel=ctx.msg.channel,
+        chat_id=ctx.msg.chat_id,
+        content=content,
         metadata={"render_as": "text"},
     )
 
@@ -108,3 +181,7 @@ def register_builtin_commands(router: CommandRouter) -> None:
     router.exact("/new", cmd_new)
     router.exact("/status", cmd_status)
     router.exact("/help", cmd_help)
+    router.exact("/finance", cmd_finance_help)
+    router.exact("/finance-enqueue-reward", cmd_finance_enqueue_reward)
+    router.exact("/finance-score-reward", cmd_finance_score_reward)
+    router.prefix("/finance ", cmd_finance)
